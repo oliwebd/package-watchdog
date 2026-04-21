@@ -4,6 +4,11 @@
   "description": "Checks for system and Flatpak updates and notifies you via native GNOME Shell notifications, with a top panel indicator showing live update status.",
   "main": "extension.js",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oliwebd/package-watchdog.git"
+  },
+  "homepage": "https://github.com/oliwebd/package-watchdog#readme",
   "scripts": {
     "build": "mkdir -p dist && tsx build.ts && cp metadata.json dist/ && cp -r schemas dist/",
     "watch": "tsx build.ts --watch",

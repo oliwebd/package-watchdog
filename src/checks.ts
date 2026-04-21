@@ -1,4 +1,5 @@
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import { spawnRead, DistroInfo } from './utils.js';
 
 let Soup: any = null;
@@ -12,7 +13,7 @@ async function _initSoup() {
         Soup = S;
         soupSession = new Soup.Session();
     } catch (e) {
-        console.error(`Watchdog: Failed to load Soup: ${e}`);
+        /* skip */
     }
 }
 
@@ -195,7 +196,6 @@ export async function getInstalledPackages(
 
         return pkgs;
     } catch (e) {
-        console.error(`Error listing packages: ${e}`);
         return [];
     }
 }
@@ -232,7 +232,6 @@ export async function getFlatpakPkgInfo(monitoredPaths?: string): Promise<PkgInf
 
         return results;
     } catch (e) {
-        console.error(`Error getting Flatpak info: ${e}`);
         return [];
     }
 }
@@ -335,8 +334,10 @@ export async function getNpmPkgInfo(
             for (const jsonFile of jsonFiles) {
                 if (jsonFile.includes('node_modules')) continue;
                 try {
-                    const [ok, contents] = GLib.file_get_contents(jsonFile);
-                    if (!ok) continue;
+                    const file = Gio.File.new_for_path(jsonFile);
+                    const [contents] = await file.load_contents_async(null);
+                    if (!contents) continue;
+
                     const data = JSON.parse(new TextDecoder().decode(contents));
                     const deps = { ...data.dependencies, ...data.devDependencies };
                     for (const [name, ver] of Object.entries(deps)) {
@@ -383,7 +384,6 @@ async function autoDiscoverNpmProjects(): Promise<string[]> {
         const dirs = files.map((f: string) => f.substring(0, f.lastIndexOf('/')));
         return Array.from(new Set(dirs));
     } catch (e) {
-        console.error(`NPM Auto-discovery failed: ${e}`);
         return [];
     }
 }
@@ -442,12 +442,11 @@ export async function checkOsv(
                     });
                 }
             } catch (err) {
-                console.error(`OSV batch error: ${err}`);
+                /* skip */
             }
         }
         return vulnerabilities.sort((a, b) => a.pkgName.localeCompare(b.pkgName));
     } catch (e) {
-        console.error(`OSV Check failed: ${e}`);
         return [];
     }
 }

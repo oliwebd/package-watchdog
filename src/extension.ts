@@ -85,7 +85,11 @@ export default class PackageWatchdogExtension extends Extension {
                 this._settings,
             );
             // Even if we skip, we should ensure the UI is in a "Ready" state
-            if (this._indicator) this._indicator.updateInfo(this._getDistroInfo());
+            if (this._indicator) {
+                this._getDistroInfo().then(info => {
+                    this._indicator.updateInfo(info);
+                });
+            }
         }
 
         const intervalHours = this._settings?.get_int('check-interval-hours') || 4;
@@ -100,7 +104,7 @@ export default class PackageWatchdogExtension extends Extension {
         );
     }
 
-    private _getDistroInfo(): any {
+    private async _getDistroInfo(): Promise<any> {
         const now = Math.floor(Date.now() / 1000);
         const cachedName = this._settings?.get_string('cached-distro-name') || '';
         const cachedTime = this._settings?.get_int64('cached-distro-timestamp') || 0;
@@ -115,7 +119,7 @@ export default class PackageWatchdogExtension extends Extension {
             };
         }
 
-        const info = detectDistroInfo();
+        const info = await detectDistroInfo();
         this._distroInfo = info;
         this._settings?.set_string('cached-distro-name', info.name);
         this._settings?.set_int64('cached-distro-timestamp', BigInt(now));
@@ -151,7 +155,7 @@ export default class PackageWatchdogExtension extends Extension {
         try {
             logDebug('Extension', 'Starting background check workflow...', this._settings);
 
-            if (!this._distroInfo) this._distroInfo = detectDistroInfo();
+            if (!this._distroInfo) this._distroInfo = await detectDistroInfo();
             if (this._indicator) this._indicator.setBusy(true);
 
             const s = this._settings;
@@ -221,7 +225,8 @@ export default class PackageWatchdogExtension extends Extension {
             );
 
             if (this._indicator) {
-                this._indicator.updateInfo(this._getDistroInfo());
+                const info = await this._getDistroInfo();
+                this._indicator.updateInfo(info);
 
                 if (total === 0 && cveCount === 0) {
                     this._indicator.updateStatus(0, _('System is up to date'), 0, [], []);
@@ -274,7 +279,7 @@ export default class PackageWatchdogExtension extends Extension {
     async _runCveCheck() {
         if (!this._indicator) return;
         try {
-            if (!this._distroInfo) this._distroInfo = detectDistroInfo();
+            if (!this._distroInfo) this._distroInfo = await detectDistroInfo();
             if (!this._distroInfo) return;
 
             this._indicator.setBusy(true, _('Scanning for security CVEs...'));

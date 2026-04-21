@@ -7,6 +7,9 @@ if (Gio.Subprocess.prototype.communicate_utf8_async) {
 if (Gio.Subprocess.prototype.wait_async) {
     Gio._promisify(Gio.Subprocess.prototype, 'wait_async', 'wait_finish');
 }
+if (Gio.File.prototype.load_contents_async) {
+    Gio._promisify(Gio.File.prototype, 'load_contents_async', 'load_contents_finish');
+}
 
 export interface DistroInfo {
     family: string;
@@ -16,12 +19,13 @@ export interface DistroInfo {
 }
 
 /**
- * Detects the current distribution information from /etc/os-release
+ * Detects the current distribution information from /etc/os-release (Asynchronous)
  */
-export function detectDistroInfo(): DistroInfo {
+export async function detectDistroInfo(): Promise<DistroInfo> {
     try {
-        const [ok, contents] = GLib.file_get_contents('/etc/os-release');
-        if (!ok) return { family: 'unknown', name: 'Unknown', manager: 'none', versionId: '' };
+        const file = Gio.File.new_for_path('/etc/os-release');
+        const [contents] = await file.load_contents_async(null);
+        if (!contents) return { family: 'unknown', name: 'Unknown', manager: 'none', versionId: '' };
 
         const text = new TextDecoder().decode(contents);
         const idLike = (text.match(/^ID_LIKE="?([^"\n]+)"?/m) || [])[1] || '';

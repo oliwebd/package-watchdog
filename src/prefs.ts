@@ -22,9 +22,9 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         super(metadata);
         this.initTranslations();
     }
-    fillPreferencesWindow(window: any) {
+    async fillPreferencesWindow(window: any) {
         const settings = this.getSettings();
-        const distro = detectDistroInfo();
+        const distro = await detectDistroInfo();
 
         const page = new Adw.PreferencesPage({
             title: _('Package Watchdog'),

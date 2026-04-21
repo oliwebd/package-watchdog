@@ -12,7 +12,7 @@ async function _initSoup() {
         const { default: S } = await import('gi://Soup?version=3.0');
         Soup = S;
         soupSession = new Soup.Session();
-    } catch (e) {
+    } catch (_e) {
         /* skip */
     }
 }
@@ -195,7 +195,7 @@ export async function getInstalledPackages(
         }
 
         return pkgs;
-    } catch (e) {
+    } catch (_e) {
         return [];
     }
 }
@@ -231,7 +231,7 @@ export async function getFlatpakPkgInfo(monitoredPaths?: string): Promise<PkgInf
         }
 
         return results;
-    } catch (e) {
+    } catch (_e) {
         return [];
     }
 }
@@ -383,7 +383,7 @@ async function autoDiscoverNpmProjects(): Promise<string[]> {
         // Return unique directories containing package.json
         const dirs = files.map((f: string) => f.substring(0, f.lastIndexOf('/')));
         return Array.from(new Set(dirs));
-    } catch (e) {
+    } catch (_e) {
         return [];
     }
 }
@@ -441,12 +441,12 @@ export async function checkOsv(
                         }
                     });
                 }
-            } catch (err) {
+            } catch (_err) {
                 /* skip */
             }
         }
         return vulnerabilities.sort((a, b) => a.pkgName.localeCompare(b.pkgName));
-    } catch (e) {
+    } catch (_e) {
         return [];
     }
 }

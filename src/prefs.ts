@@ -1,9 +1,13 @@
+/// <reference path="./ambient.d.ts" />
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk';
-import { ExtensionPreferences, gettext as _ } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
+import {
+    ExtensionPreferences,
+    gettext as _,
+} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import { detectDistroInfo, logDebug, DistroInfo } from './utils.js';
 import {
@@ -249,8 +253,10 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
 
             prefix.icon_name = origPrefix;
             suffix.icon_name = 'emblem-ok-symbolic';
-        } catch (e: any) {
-            window.add_toast(new Adw.Toast({ title: _('Error: %s').format(e.message), timeout: 5 }));
+        } catch (_e: any) {
+            window.add_toast(
+                new Adw.Toast({ title: _('Error: %s').format(_e.message), timeout: 5 }),
+            );
             prefix.icon_name = 'emblem-error-symbolic';
         } finally {
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
@@ -284,9 +290,9 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
 
             prefix.icon_name = count > 0 ? 'security-high-symbolic' : 'emblem-ok-symbolic';
             suffix.icon_name = 'emblem-ok-symbolic';
-        } catch (e: any) {
+        } catch (_e: any) {
             window.add_toast(
-                new Adw.Toast({ title: _('CVE Check Error: %s').format(e.message), timeout: 5 }),
+                new Adw.Toast({ title: _('CVE Check Error: %s').format(_e.message), timeout: 5 }),
             );
             prefix.icon_name = 'emblem-error-symbolic';
         } finally {

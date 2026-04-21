@@ -86,7 +86,7 @@ export default class PackageWatchdogExtension extends Extension {
             );
             // Even if we skip, we should ensure the UI is in a "Ready" state
             if (this._indicator) {
-                this._getDistroInfo().then(info => {
+                this._getDistroInfo().then((info) => {
                     this._indicator.updateInfo(info);
                 });
             }
@@ -246,7 +246,9 @@ export default class PackageWatchdogExtension extends Extension {
                     }
 
                     let statusText =
-                        parts.length > 0 ? _('%s available').format(parts.join(', ')) : _('Updated');
+                        parts.length > 0
+                            ? _('%s available').format(parts.join(', '))
+                            : _('Updated');
                     if (cveCount > 0) statusText += _(' (%s security alerts)').format(cveCount);
 
                     const updateList = [

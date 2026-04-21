@@ -106,7 +106,10 @@ export const PackageWatchdogIndicator = GObject.registerClass(
             this._sourcesItem = this._createIconMenuItem(_('Monitoring'), 'view-list-symbolic');
             this.menu.addMenuItem(this._sourcesItem);
 
-            this._cveItem = this._createIconMenuItem(_('Security Alerts'), 'security-high-symbolic');
+            this._cveItem = this._createIconMenuItem(
+                _('Security Alerts'),
+                'security-high-symbolic',
+            );
             this._cveItem.visible = false;
             this.menu.addMenuItem(this._cveItem);
 

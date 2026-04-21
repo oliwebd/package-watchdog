@@ -25,7 +25,8 @@ export async function detectDistroInfo(): Promise<DistroInfo> {
     try {
         const file = Gio.File.new_for_path('/etc/os-release');
         const [contents] = await file.load_contents_async(null);
-        if (!contents) return { family: 'unknown', name: 'Unknown', manager: 'none', versionId: '' };
+        if (!contents)
+            return { family: 'unknown', name: 'Unknown', manager: 'none', versionId: '' };
 
         const text = new TextDecoder().decode(contents);
         const idLike = (text.match(/^ID_LIKE="?([^"\n]+)"?/m) || [])[1] || '';

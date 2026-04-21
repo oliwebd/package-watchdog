@@ -1,4 +1,3 @@
-/// <reference path="./ambient.d.ts" />
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';

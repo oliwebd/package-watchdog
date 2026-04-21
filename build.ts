@@ -1,6 +1,5 @@
 import esbuild from 'esbuild';
 import fs from 'fs';
-import path from 'path';
 
 const commonOptions: esbuild.BuildOptions = {
     bundle: true,

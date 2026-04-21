@@ -1,4 +1,3 @@
-import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
 if (Gio.Subprocess.prototype.communicate_utf8_async) {

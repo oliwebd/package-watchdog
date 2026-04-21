@@ -28,7 +28,7 @@
     "monitoring",
     "linux"
   ],
-  "author": "",
+  "author": "oliwebd",
   "license": "GPL-3.0-or-later",
   "devDependencies": {
     "@eslint/js": "^10.0.1",

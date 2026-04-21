@@ -17,7 +17,17 @@
     "pack": "pnpm run build && glib-compile-schemas dist/schemas/ && gnome-extensions pack --extra-source=dist/schemas --force dist/",
     "deploy": "pnpm run pack && gnome-extensions install --force package-watchdog@oliwebd.github.com.shell-extension.zip && gnome-extensions enable package-watchdog@oliwebd.github.com"
   },
-  "keywords": [],
+  "keywords": [
+    "gnome-shell",
+    "extension",
+    "updates",
+    "package-manager",
+    "flatpak",
+    "security",
+    "vulnerability",
+    "monitoring",
+    "linux"
+  ],
   "author": "",
   "license": "GPL-3.0-or-later",
   "devDependencies": {

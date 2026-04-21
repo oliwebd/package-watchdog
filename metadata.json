@@ -1,0 +1,10 @@
+{
+  "name": "Package Watchdog",
+  "description": "Automatically checks for DNF, APT, Zypper and Flatpak updates and notifies you via GNOME Shell notifications.",
+  "uuid": "package-watchdog@oliwebd.github.com",
+  "shell-version": ["48", "49", "50"],
+  "version": 1,
+  "url": "https://github.com/oliwebd/package-watchdog",
+  "settings-schema": "org.gnome.shell.extensions.package-watchdog",
+  "gettext-domain": "package-watchdog@oliwebd.github.com"
+}

@@ -1,0 +1,68 @@
+/* Package Watchdog Stylesheet */
+
+.package-watchdog-badge {
+    background-color: #3584e4;
+    color: white;
+    font-size: 10px;
+    font-weight: bold;
+    border-radius: 10px;
+    padding: 1px 6px;
+    margin-left: 2px;
+    margin-top: 1px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.package-watchdog-badge-urgent {
+    background-color: #c01c28;
+}
+
+.package-watchdog-badge-warning {
+    background-color: #f5c211;
+    color: #241f31;
+}
+
+/* Menu Enhancements */
+.package-watchdog-header {
+    font-weight: bold;
+    color: #ffffff;
+    padding: 8px 0;
+}
+
+.package-watchdog-header-icon {
+    margin-left: 8px;
+    margin-right: 12px;
+}
+
+.package-watchdog-status-text {
+    font-weight: bold;
+}
+
+.package-watchdog-info-text {
+    font-size: 0.9em;
+    opacity: 0.7;
+}
+
+.package-watchdog-security-alert {
+    color: #c01c28;
+    font-weight: bold;
+}
+
+/* Loading & Animation */
+.package-watchdog-loading-label {
+    font-size: 0.85em;
+    opacity: 0.8;
+    margin-left: 6px;
+    font-weight: normal;
+}
+
+.package-watchdog-spinning {
+    animation-name: package-watchdog-spin;
+    animation-duration: 2s;
+    animation-iteration-count: infinite;
+    animation-timing-function: linear;
+}
+
+@keyframes package-watchdog-spin {
+    from { transition-duration: 0ms; rotation-angle: 0deg; }
+    to { transition-duration: 0ms; rotation-angle: 360deg; }
+}

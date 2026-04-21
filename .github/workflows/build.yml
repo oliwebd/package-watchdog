@@ -1,0 +1,41 @@
+name: Build and Pack Extension
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext libglib2.0-dev-bin gnome-shell
+
+      - name: Build and Pack
+        run: pnpm run pack
+
+      - name: Upload Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-watchdog-extension
+          path: package-watchdog@oliwebd.github.com.shell-extension.zip

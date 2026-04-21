@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.package-watchdog"
+          path="/org/gnome/shell/extensions/package-watchdog/">
+
+    <key name="check-system" type="b">
+      <default>true</default>
+      <summary>Check system package updates</summary>
+      <description>Whether to check for system package updates via the detected package manager (dnf, apt, or zypper).</description>
+    </key>
+
+    <key name="check-flatpak" type="b">
+      <default>true</default>
+      <summary>Check Flatpak updates</summary>
+      <description>Whether to check for Flatpak application updates.</description>
+    </key>
+
+    <key name="check-interval-hours" type="i">
+      <default>4</default>
+      <range min="1" max="24"/>
+      <summary>Check interval (hours)</summary>
+      <description>How often to poll for updates, in hours.</description>
+    </key>
+
+    <key name="check-cve" type="b">
+      <default>false</default>
+      <summary>Check for vulnerabilities (OSV)</summary>
+      <description>Whether to check for known vulnerabilities in installed system packages using OSV API.</description>
+    </key>
+
+    <key name="debug-mode" type="b">
+      <default>false</default>
+      <summary>Enable Debug Logging</summary>
+      <description>Write detailed extension logs to the system journal (viewable via journalctl).</description>
+    </key>
+    <key name="monitored-git-paths" type="s">
+      <default>''</default>
+      <summary>Monitored Git Paths</summary>
+      <description>Comma-separated list of directories to scan for Git repositories to check for vulnerabilities.</description>
+    </key>
+
+    <key name="check-npm" type="b">
+      <default>false</default>
+      <summary>Check Node.js packages (npm)</summary>
+      <description>Whether to check for vulnerabilities in Node.js packages using OSV API.</description>
+    </key>
+
+    <key name="monitored-npm-paths" type="s">
+      <default>''</default>
+      <summary>Monitored npm Paths</summary>
+      <description>Comma-separated list of directories to scan for package.json files.</description>
+    </key>
+
+    <key name="npm-auto-discover" type="b">
+      <default>false</default>
+      <summary>Auto-discover npm projects</summary>
+      <description>Automatically search your home directory for Node.js projects.</description>
+    </key>
+
+    <key name="last-check-timestamp" type="x">
+      <default>0</default>
+      <summary>Last check timestamp</summary>
+      <description>Unix timestamp (seconds) of the last successful check.</description>
+    </key>
+
+    <key name="cached-distro-name" type="s">
+      <default>''</default>
+      <summary>Cached distro name</summary>
+      <description>Cached name of the distribution.</description>
+    </key>
+
+    <key name="cached-distro-timestamp" type="x">
+      <default>0</default>
+      <summary>Cached distro timestamp</summary>
+      <description>Unix timestamp (seconds) of the last distro detection.</description>
+    </key>
+
+  </schema>
+</schemalist>

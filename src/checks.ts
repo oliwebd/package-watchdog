@@ -114,17 +114,6 @@ export interface FlatpakUpdateResult {
 
 export async function checkFlatpak(): Promise<FlatpakUpdateResult> {
     try {
-        const { stdout: updateOut } = await spawnRead([
-            'env',
-            'LC_ALL=C',
-            'flatpak',
-            'update',
-            '--noninteractive',
-        ]);
-        if (updateOut.includes('Nothing to do.')) {
-            return { apps: [], runtimes: [], total: 0 };
-        }
-
         const parseLines = (stdout: string) =>
             stdout
                 .split('\n')

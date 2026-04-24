@@ -6,7 +6,7 @@ import Gtk from 'gi://Gtk';
 import {
     ExtensionPreferences,
     gettext as _,
-} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
+} from 'resource:///org/gnome/shell/extensions/prefs.js';
 
 import { detectDistroInfo, logDebug, DistroInfo } from './utils.js';
 import {
@@ -193,9 +193,6 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
             title: _('Enable Debug Mode'),
             subtitle: _('Write detailed information to the system journal'),
         });
-        settings.bind('debug-mode', debugRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-        debugGroup.add(debugRow);
-
         settings.bind('debug-mode', debugRow, 'active', Gio.SettingsBindFlags.DEFAULT);
         debugGroup.add(debugRow);
 

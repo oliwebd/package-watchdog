@@ -26,6 +26,7 @@ export default class PackageWatchdogExtension extends Extension {
     private _distroInfo: DistroInfo | null = null;
     private _lastCheckTime: Date | null = null;
     private _indicator: any = null;
+    private _isChecking: boolean = false;
 
     constructor(metadata: any) {
         super(metadata);
@@ -152,6 +153,9 @@ export default class PackageWatchdogExtension extends Extension {
     }
 
     async _runUpdateCheck() {
+        if (this._isChecking) return 0;
+        this._isChecking = true;
+
         try {
             logDebug('Extension', 'Starting background check workflow...', this._settings);
 
@@ -275,6 +279,8 @@ export default class PackageWatchdogExtension extends Extension {
         } catch (e: any) {
             logDebug('Extension', `Error during check: ${e.message}`, this._settings);
             return 0;
+        } finally {
+            this._isChecking = false;
         }
     }
 
@@ -335,9 +341,12 @@ export default class PackageWatchdogExtension extends Extension {
 
     _openUpdateManager() {
         try {
-            if (Gio.AppInfo.launch_default_for_uri('appstream://updates', null)) {
+            try {
+                Gio.AppInfo.launch_default_for_uri('appstream://updates', null);
                 this._scheduleRefresh();
                 return;
+            } catch (_e) {
+                /* fall through to manual managers */
             }
 
             const managers = [
@@ -382,7 +391,10 @@ export default class PackageWatchdogExtension extends Extension {
             this._runUpdateCheck();
             remaining--;
             const continueRunning = remaining > 0;
-            if (!continueRunning) this._timeoutId = null;
+            if (!continueRunning) {
+                this._timeoutId = null;
+                this._scheduleChecks();
+            }
             return continueRunning ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
         });
     }
@@ -446,7 +458,15 @@ export default class PackageWatchdogExtension extends Extension {
 
         // Write script to temp file to avoid all quoting issues
         const scriptPath = GLib.build_filenamev([GLib.get_tmp_dir(), 'package-watchdog-update.sh']);
-        GLib.file_set_contents(scriptPath, lines.join('\n') + '\n');
+        const file = Gio.File.new_for_path(scriptPath);
+        const bytes = new TextEncoder().encode(lines.join('\n') + '\n');
+        file.replace_contents(
+            bytes,
+            null,
+            false,
+            Gio.FileCreateFlags.REPLACE_DESTINATION,
+            null,
+        );
 
         // Try terminal emulators — ptyxis first (Fedora 43+), then fallbacks
         const terminalConfigs: string[][] = [

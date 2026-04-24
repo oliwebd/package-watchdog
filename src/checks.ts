@@ -114,15 +114,51 @@ export interface FlatpakUpdateResult {
 
 export async function checkFlatpak(): Promise<FlatpakUpdateResult> {
     try {
-        const parseLines = (stdout: string) =>
-            stdout
-                .split('\n')
-                .map((l: string) => l.trim())
-                .filter((l: string) => l.length > 0 && l !== 'Application ID');
+        const { stdout: listOut } = await spawnRead([
+            'flatpak',
+            'list',
+            '--columns=application,active,options',
+        ]);
+        const installed = new Map<string, string[]>();
+        listOut.trim().split('\n').filter(Boolean).forEach((line: string) => {
+            const parts = line.split(/\s+/);
+            if (parts.length < 2) return;
+            const app = parts[0];
+            const active = parts[1];
+            const opts = parts[2] || '';
+            const hashes = [active];
+            const altMatch = opts.match(/alt-id=([0-9a-f]+)/);
+            if (altMatch) hashes.push(altMatch[1]);
+            installed.set(app, hashes);
+        });
+
+        const parseLines = (stdout: string) => {
+            const lines = stdout.trim().split('\n').filter(Boolean);
+            const validUpdates: string[] = [];
+            for (const line of lines) {
+                if (line.startsWith('Application ID')) continue;
+                const parts = line.split(/\s+/);
+                const app = parts[0];
+                if (!app) continue;
+                if (parts.length < 2) {
+                    validUpdates.push(app);
+                    continue;
+                }
+                const remoteCommit = parts[1];
+
+                const localHashes = installed.get(app);
+                if (localHashes) {
+                    const isInstalled = localHashes.some((h) => h.startsWith(remoteCommit));
+                    if (isInstalled) continue;
+                }
+                validUpdates.push(app);
+            }
+            return validUpdates;
+        };
 
         const [appResult, runtimeResult] = await Promise.all([
-            spawnRead(['flatpak', 'remote-ls', '--updates', '--app', '--columns=application']),
-            spawnRead(['flatpak', 'remote-ls', '--updates', '--runtime', '--columns=application']),
+            spawnRead(['flatpak', 'remote-ls', '--updates', '--app', '--columns=application,commit:f']),
+            spawnRead(['flatpak', 'remote-ls', '--updates', '--runtime', '--columns=application,commit:f']),
         ]);
 
         const apps = parseLines(appResult.stdout);

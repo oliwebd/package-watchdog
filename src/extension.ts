@@ -290,7 +290,13 @@ export default class PackageWatchdogExtension extends Extension {
             const ecosystem = getOsvEcosystem(this._distroInfo);
             const gitPaths = this._settings?.get_string('monitored-git-paths') || '';
 
-            if (!ecosystem && !gitPaths) {
+            // C-2: read npm settings so the manual scan mirrors the scheduled scan
+            const checkNpmE = this._settings?.get_boolean('check-npm') ?? false;
+            const autoNpm   = this._settings?.get_boolean('npm-auto-discover') ?? false;
+            const npmPaths  = this._settings?.get_string('monitored-npm-paths') || '';
+            const npmEnabled = checkNpmE && (autoNpm || npmPaths.length > 0);
+
+            if (!ecosystem && !gitPaths && !npmEnabled) {
                 this._indicator.updateStatus(0, _('Security scan not supported'), 0);
                 this._indicator.setBusy(false);
                 return;
@@ -302,6 +308,10 @@ export default class PackageWatchdogExtension extends Extension {
             }
             if (gitPaths) {
                 pkgs.push(...(await getLocalGitRepoCommits(gitPaths)));
+            }
+            // C-2: include npm packages in the manual CVE scan
+            if (checkNpmE) {
+                pkgs.push(...(await getNpmPkgInfo(npmPaths, autoNpm)));
             }
 
             const cveDetails = await checkOsv(pkgs, ecosystem);

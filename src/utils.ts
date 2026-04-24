@@ -37,7 +37,10 @@ export async function detectDistroInfo(): Promise<DistroInfo> {
 
         if (all.includes('fedora') || all.includes('rhel') || all.includes('centos'))
             return { family: 'fedora', name: prettyName, manager: 'dnf', versionId };
-        if (all.includes('debian') || all.includes('ubuntu'))
+        // Check Ubuntu before the generic debian branch — ID_LIKE=debian would match debian otherwise
+        if (id === 'ubuntu' || idLike.includes('ubuntu'))
+            return { family: 'ubuntu', name: prettyName, manager: 'apt', versionId };
+        if (all.includes('debian'))
             return { family: 'debian', name: prettyName, manager: 'apt', versionId };
         if (all.includes('opensuse') || all.includes('suse'))
             return { family: 'opensuse', name: prettyName, manager: 'zypper', versionId };

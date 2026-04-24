@@ -4,6 +4,7 @@ import { spawnRead, DistroInfo } from './utils.js';
 
 let Soup: any = null;
 let soupSession: any = null;
+let _cancellable: any = null;
 
 async function _initSoup() {
     if (Soup) return;
@@ -12,12 +13,18 @@ async function _initSoup() {
         const { default: S } = await import('gi://Soup?version=3.0');
         Soup = S;
         soupSession = new Soup.Session();
+        // B-3: set a per-request timeout so hung API calls don't lock the indicator
+        soupSession.timeout = 30;
+        _cancellable = new Gio.Cancellable();
     } catch (_e) {
         /* skip */
     }
 }
 
 export function cleanupChecks() {
+    // B-3: cancel any in-flight OSV requests when the extension is disabled
+    _cancellable?.cancel();
+    _cancellable = null;
     soupSession = null;
     Soup = null;
 }
@@ -30,10 +37,11 @@ export function getOsvEcosystem(distro: DistroInfo): string {
     const v = distro.versionId;
 
     if (family === 'fedora') return v ? `Fedora:${v}` : 'Fedora';
+    // C-1: explicit ubuntu branch — must come before debian so Ubuntu users
+    // are queried against Ubuntu Security Notices, not Debian advisories.
+    if (family === 'ubuntu') return v ? `Ubuntu:${v}` : 'Ubuntu';
     if (family === 'debian') return v ? `Debian:${v}` : 'Debian';
     if (family === 'opensuse') return 'openSUSE';
-
-    if (distro.name.toLowerCase().includes('ubuntu')) return v ? `Ubuntu:${v}` : 'Ubuntu';
 
     return '';
 }
@@ -341,7 +349,8 @@ export async function getNpmPkgInfo(
                     const data = JSON.parse(new TextDecoder().decode(contents));
                     const deps = { ...data.dependencies, ...data.devDependencies };
                     for (const [name, ver] of Object.entries(deps)) {
-                        const version = (ver as string).replace(/[^0-9.]/g, '');
+                        // B-1 + B-2: preserve pre-release identifiers; reject file:/workspace: refs
+                        const version = extractNpmVersion(ver as string);
                         if (version) {
                             results.push({ name: name as string, version, ecosystem: 'npm' });
                         }
@@ -355,6 +364,24 @@ export async function getNpmPkgInfo(
         }
     }
     return results;
+}
+
+/**
+ * B-1 + B-2: Extracts a clean version string from an npm semver range specifier.
+ *
+ * - Rejects local file paths ("file:../lib") and workspace references
+ *   ("workspace:^1.0.0") before they can be sent to OSV as junk data.
+ * - Strips leading range operators (^, ~, >=, etc.) but preserves pre-release
+ *   identifiers so "1.2.3-beta.1" stays intact rather than becoming "1.2.3.1".
+ */
+function extractNpmVersion(raw: string): string {
+    if (!raw) return '';
+    // Reject local file and workspace references — these are not published packages
+    if (raw.startsWith('file:') || raw.startsWith('workspace:')) return '';
+    // Strip leading range operators: ^, ~, >=, <=, >, <, =
+    const stripped = raw.replace(/^[^0-9]*/, '');
+    // Must start with digit.digit to be a real version
+    return /^\d+\.\d+/.test(stripped) ? stripped : '';
 }
 
 /**
@@ -420,10 +447,12 @@ export async function checkOsv(
             );
 
             try {
+                // B-3: pass the module-level cancellable so in-flight requests
+                // are aborted when cleanupChecks() is called on extension disable.
                 const bytes = await soupSession.send_and_read_async(
                     message,
                     GLib.PRIORITY_DEFAULT,
-                    null,
+                    _cancellable,
                 );
                 if (message.status_code !== 200) continue;
                 const data = JSON.parse(new TextDecoder().decode(bytes.get_data() as any));

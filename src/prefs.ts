@@ -129,6 +129,17 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
             title: _('Monitored Git Paths'),
         });
 
+        // M-1: disclose that commit hashes are sent externally so users can make
+        // an informed choice when enabling Git repository scanning.
+        try {
+            // @ts-ignore
+            gitPathsRow.subtitle = _(
+                'Commit hashes are sent to osv.dev to check for known vulnerabilities. No source code is transmitted.',
+            );
+        } catch (_e) {
+            /* subtitle not supported on this Adw version */
+        }
+
         // Use safe property setting for compatibility
         try {
             // @ts-ignore

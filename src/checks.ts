@@ -9,20 +9,18 @@ let _cancellable: any = null;
 async function _initSoup() {
     if (Soup) return;
     try {
-        // @ts-ignore
         const { default: S } = await import('gi://Soup?version=3.0');
         Soup = S;
         soupSession = new Soup.Session();
-        // B-3: set a per-request timeout so hung API calls don't lock the indicator
-        soupSession.timeout = 30;
+        soupSession.timeout = 30; // abort hung requests after 30 s
         _cancellable = new Gio.Cancellable();
     } catch (_e) {
-        /* skip */
+        /* Soup unavailable — OSV scans will be silently skipped */
     }
 }
 
+/** Cancel any in-flight OSV requests and release Soup resources. */
 export function cleanupChecks() {
-    // B-3: cancel any in-flight OSV requests when the extension is disabled
     _cancellable?.cancel();
     _cancellable = null;
     soupSession = null;
@@ -30,21 +28,21 @@ export function cleanupChecks() {
 }
 
 /**
- * Maps the current distribution to an OSV-supported ecosystem string.
+ * Maps a DistroInfo to an OSV-supported ecosystem string.
+ * Exported so it can be used from both extension.ts and prefs.ts without
+ * needing a dynamic import.
  */
 export function getOsvEcosystem(distro: DistroInfo): string {
-    const family = distro.family;
-    const v = distro.versionId;
-
+    const { family, versionId: v } = distro;
     if (family === 'fedora') return v ? `Fedora:${v}` : 'Fedora';
-    // C-1: explicit ubuntu branch — must come before debian so Ubuntu users
-    // are queried against Ubuntu Security Notices, not Debian advisories.
+    // Ubuntu must come before debian: ID_LIKE=debian would otherwise match.
     if (family === 'ubuntu') return v ? `Ubuntu:${v}` : 'Ubuntu';
     if (family === 'debian') return v ? `Debian:${v}` : 'Debian';
     if (family === 'opensuse') return 'openSUSE';
-
     return '';
 }
+
+// ── System package manager checks ────────────────────────────────────────────
 
 export async function checkDnf(): Promise<string[]> {
     try {
@@ -55,11 +53,11 @@ export async function checkDnf(): Promise<string[]> {
             '--refresh',
         ]);
         const lines = stdout.split('\n').filter((l: string) => {
-            const trimmed = l.trim();
+            const t = l.trim();
             return (
-                trimmed.length > 0 &&
-                !trimmed.toLowerCase().startsWith('last metadata') &&
-                !trimmed.toLowerCase().startsWith('updating and loading')
+                t.length > 0 &&
+                !t.toLowerCase().startsWith('last metadata') &&
+                !t.toLowerCase().startsWith('updating and loading')
             );
         });
         if (exitCode === 100 || lines.length > 0) {
@@ -74,11 +72,10 @@ export async function checkDnf(): Promise<string[]> {
 export async function checkApt(): Promise<string[]> {
     try {
         const { stdout } = await spawnRead(['apt', 'list', '--upgradable', '--quiet=2']);
-        const lines = stdout
+        return stdout
             .split('\n')
             .filter((l: string) => l.trim().length > 0 && l.includes('/'))
             .map((l: string) => l.split('/')[0]);
-        return lines;
     } catch (_e) {
         return [];
     }
@@ -92,15 +89,11 @@ export async function checkZypper(): Promise<string[]> {
             '--quiet',
             'list-updates',
         ]);
-        const lines = stdout
+        return stdout
             .split('\n')
             .filter((l: string) => l.startsWith('v |'))
-            .map((l: string) => {
-                const parts = l.split('|');
-                return parts[2]?.trim() || '';
-            })
+            .map((l: string) => l.split('|')[2]?.trim() ?? '')
             .filter(Boolean);
-        return lines;
     } catch (_e) {
         return [];
     }
@@ -119,23 +112,26 @@ export async function checkFlatpak(): Promise<FlatpakUpdateResult> {
             'list',
             '--columns=application,active,options',
         ]);
-        const installed = new Map<string, string[]>();
-        listOut.trim().split('\n').filter(Boolean).forEach((line: string) => {
-            const parts = line.split(/\s+/);
-            if (parts.length < 2) return;
-            const app = parts[0];
-            const active = parts[1];
-            const opts = parts[2] || '';
-            const hashes = [active];
-            const altMatch = opts.match(/alt-id=([0-9a-f]+)/);
-            if (altMatch) hashes.push(altMatch[1]);
-            installed.set(app, hashes);
-        });
 
-        const parseLines = (stdout: string) => {
-            const lines = stdout.trim().split('\n').filter(Boolean);
+        // Build a map: appId → [active-commit, alt-id-commit?]
+        const installed = new Map<string, string[]>();
+        listOut
+            .trim()
+            .split('\n')
+            .filter(Boolean)
+            .forEach((line: string) => {
+                const parts = line.split(/\s+/);
+                if (parts.length < 2) return;
+                const [app, active, opts = ''] = parts;
+                const hashes = [active];
+                const altMatch = opts.match(/alt-id=([0-9a-f]+)/);
+                if (altMatch) hashes.push(altMatch[1]);
+                installed.set(app, hashes);
+            });
+
+        const parseLines = (stdout: string): string[] => {
             const validUpdates: string[] = [];
-            for (const line of lines) {
+            for (const line of stdout.trim().split('\n').filter(Boolean)) {
                 if (line.startsWith('Application ID')) continue;
                 const parts = line.split(/\s+/);
                 const app = parts[0];
@@ -145,20 +141,28 @@ export async function checkFlatpak(): Promise<FlatpakUpdateResult> {
                     continue;
                 }
                 const remoteCommit = parts[1];
-
                 const localHashes = installed.get(app);
-                if (localHashes) {
-                    const isInstalled = localHashes.some((h) => h.startsWith(remoteCommit));
-                    if (isInstalled) continue;
-                }
+                if (localHashes?.some((h) => h.startsWith(remoteCommit))) continue;
                 validUpdates.push(app);
             }
             return validUpdates;
         };
 
         const [appResult, runtimeResult] = await Promise.all([
-            spawnRead(['flatpak', 'remote-ls', '--updates', '--app', '--columns=application,commit:f']),
-            spawnRead(['flatpak', 'remote-ls', '--updates', '--runtime', '--columns=application,commit:f']),
+            spawnRead([
+                'flatpak',
+                'remote-ls',
+                '--updates',
+                '--app',
+                '--columns=application,commit:f',
+            ]),
+            spawnRead([
+                'flatpak',
+                'remote-ls',
+                '--updates',
+                '--runtime',
+                '--columns=application,commit:f',
+            ]),
         ]);
 
         const apps = parseLines(appResult.stdout);
@@ -168,6 +172,8 @@ export async function checkFlatpak(): Promise<FlatpakUpdateResult> {
         return { apps: [], runtimes: [], total: 0 };
     }
 }
+
+// ── Package info structs ──────────────────────────────────────────────────────
 
 export interface PkgInfo {
     name: string;
@@ -195,9 +201,8 @@ export async function getInstalledPackages(
                         const parts = l.split(' ');
                         const name = parts[0];
                         const version = parts[1];
-                        const release = parts[2] || '';
-
-                        const gitMatch = (version + '-' + release).match(
+                        const release = parts[2] ?? '';
+                        const gitMatch = `${version}-${release}`.match(
                             /(?:git|gp|g)([0-9a-f]{7,40})/i,
                         );
                         return {
@@ -224,7 +229,7 @@ export async function getInstalledPackages(
         let pkgs = parse(stdout);
 
         if (monitoredPaths) {
-            pkgs = await resolveLocalCommits(pkgs, monitoredPaths);
+            pkgs = await _resolveLocalCommits(pkgs, monitoredPaths);
         }
 
         return pkgs;
@@ -240,16 +245,15 @@ export async function getFlatpakPkgInfo(monitoredPaths?: string): Promise<PkgInf
             'list',
             '--columns=application,version,active,options',
         ]);
-        const lines = stdout.trim().split('\n').filter(Boolean);
         const results: PkgInfo[] = [];
-        for (const line of lines) {
+
+        for (const line of stdout.trim().split('\n').filter(Boolean)) {
             const parts = line.split(/\s+/);
             if (parts.length < 3) continue;
-
             const name = parts[0];
             const version = parts[1] === '--' ? '' : parts[1];
             let commit = parts[2];
-            const options = parts[3] || '';
+            const options = parts[3] ?? '';
 
             if (commit.length !== 40 && options.includes('alt-id=')) {
                 const altMatch = options.match(/alt-id=([0-9a-f]{40})/);
@@ -259,31 +263,24 @@ export async function getFlatpakPkgInfo(monitoredPaths?: string): Promise<PkgInf
             results.push({ name, version, commit: commit.length >= 7 ? commit : undefined });
         }
 
-        if (monitoredPaths) {
-            return await resolveLocalCommits(results, monitoredPaths);
-        }
-
-        return results;
+        return monitoredPaths ? _resolveLocalCommits(results, monitoredPaths) : results;
     } catch (_e) {
         return [];
     }
 }
 
-/**
- * Resolves short hashes or missing commits by checking local git repositories
- */
-async function resolveLocalCommits(pkgs: PkgInfo[], pathsStr: string): Promise<PkgInfo[]> {
+/** Resolve short/missing commits by matching against local git repos. */
+async function _resolveLocalCommits(pkgs: PkgInfo[], pathsStr: string): Promise<PkgInfo[]> {
     if (!pathsStr) return pkgs;
     const localRepos = await getLocalGitRepoCommits(pathsStr);
-    const repoMap = new Map();
+    const repoMap = new Map<string, string>();
     for (const repo of localRepos) {
-        repoMap.set(repo.name.replace('local:', '').toLowerCase(), repo.commit);
+        repoMap.set(repo.name.replace('local:', '').toLowerCase(), repo.commit ?? '');
     }
 
     return pkgs.map((pkg) => {
-        const pkgShortName = pkg.name.split('.').pop()?.toLowerCase() || '';
-        const localCommit = repoMap.get(pkg.name.toLowerCase()) || repoMap.get(pkgShortName);
-
+        const shortName = pkg.name.split('.').pop()?.toLowerCase() ?? '';
+        const localCommit = repoMap.get(pkg.name.toLowerCase()) ?? repoMap.get(shortName);
         if (localCommit && (!pkg.commit || pkg.commit.length < 40)) {
             return { ...pkg, commit: localCommit };
         }
@@ -298,6 +295,7 @@ export async function getLocalGitRepoCommits(pathsStr: string): Promise<PkgInfo[
         .map((p: string) => p.trim())
         .filter(Boolean);
     const results: PkgInfo[] = [];
+
     for (const path of paths) {
         try {
             const { stdout } = await spawnRead([
@@ -310,28 +308,27 @@ export async function getLocalGitRepoCommits(pathsStr: string): Promise<PkgInfo[
                 '-type',
                 'd',
             ]);
-            const gitDirs = stdout.trim().split('\n').filter(Boolean);
-            for (const gitDir of gitDirs) {
+            for (const gitDir of stdout.trim().split('\n').filter(Boolean)) {
                 const repoPath = gitDir.replace(/\/\.git$/, '');
-                const folderName = repoPath.split('/').pop() || 'unknown-repo';
+                const folderName = repoPath.split('/').pop() ?? 'unknown-repo';
                 try {
-                    const commitResult = await spawnRead([
+                    const { stdout: commitOut } = await spawnRead([
                         'git',
                         '-C',
                         repoPath,
                         'rev-parse',
                         'HEAD',
                     ]);
-                    const commit = commitResult.stdout.trim();
-                    if (commit && commit.length === 40) {
+                    const commit = commitOut.trim();
+                    if (commit.length === 40) {
                         results.push({ name: `local:${folderName}`, version: 'git-repo', commit });
                     }
                 } catch {
-                    /* skip */
+                    /* skip unreadable repos */
                 }
             }
         } catch {
-            /* skip */
+            /* skip unreadable paths */
         }
     }
     return results;
@@ -341,18 +338,16 @@ export async function getNpmPkgInfo(
     pathsStr: string,
     autoDiscover: boolean = false,
 ): Promise<PkgInfo[]> {
-    let paths: string[] = [];
-    if (autoDiscover) {
-        paths = await autoDiscoverNpmProjects();
-    } else if (pathsStr) {
-        paths = pathsStr
-            .split(',')
-            .map((p: string) => p.trim())
-            .filter(Boolean);
-    }
+    const paths: string[] = autoDiscover
+        ? await _autoDiscoverNpmProjects()
+        : pathsStr
+              .split(',')
+              .map((p: string) => p.trim())
+              .filter(Boolean);
 
     if (paths.length === 0) return [];
     const results: PkgInfo[] = [];
+
     for (const path of paths) {
         try {
             const { stdout } = await spawnRead([
@@ -363,60 +358,46 @@ export async function getNpmPkgInfo(
                 '-name',
                 'package.json',
             ]);
-            const jsonFiles = stdout.trim().split('\n').filter(Boolean);
-            for (const jsonFile of jsonFiles) {
+            for (const jsonFile of stdout.trim().split('\n').filter(Boolean)) {
                 if (jsonFile.includes('node_modules')) continue;
                 try {
                     const file = Gio.File.new_for_path(jsonFile);
                     const [contents] = await file.load_contents_async(null);
                     if (!contents) continue;
-
                     const data = JSON.parse(new TextDecoder().decode(contents));
                     const deps = { ...data.dependencies, ...data.devDependencies };
                     for (const [name, ver] of Object.entries(deps)) {
-                        // B-1 + B-2: preserve pre-release identifiers; reject file:/workspace: refs
-                        const version = extractNpmVersion(ver as string);
+                        const version = _extractNpmVersion(ver as string);
                         if (version) {
-                            results.push({ name: name as string, version, ecosystem: 'npm' });
+                            results.push({ name, version, ecosystem: 'npm' });
                         }
                     }
                 } catch {
-                    /* skip */
+                    /* skip malformed package.json */
                 }
             }
         } catch {
-            /* skip */
+            /* skip unreadable paths */
         }
     }
     return results;
 }
 
 /**
- * B-1 + B-2: Extracts a clean version string from an npm semver range specifier.
- *
- * - Rejects local file paths ("file:../lib") and workspace references
- *   ("workspace:^1.0.0") before they can be sent to OSV as junk data.
- * - Strips leading range operators (^, ~, >=, etc.) but preserves pre-release
- *   identifiers so "1.2.3-beta.1" stays intact rather than becoming "1.2.3.1".
+ * Extract a clean semver string from an npm range specifier.
+ * Rejects file:/ and workspace: references, strips leading ^ ~ >= etc.,
+ * but preserves pre-release identifiers like "1.2.3-beta.1".
  */
-function extractNpmVersion(raw: string): string {
+function _extractNpmVersion(raw: string): string {
     if (!raw) return '';
-    // Reject local file and workspace references — these are not published packages
     if (raw.startsWith('file:') || raw.startsWith('workspace:')) return '';
-    // Strip leading range operators: ^, ~, >=, <=, >, <, =
     const stripped = raw.replace(/^[^0-9]*/, '');
-    // Must start with digit.digit to be a real version
     return /^\d+\.\d+/.test(stripped) ? stripped : '';
 }
 
-/**
- * Automatically searches the home directory for package.json files
- */
-async function autoDiscoverNpmProjects(): Promise<string[]> {
+async function _autoDiscoverNpmProjects(): Promise<string[]> {
     try {
         const home = GLib.get_home_dir();
-        // Scan common project locations or full home with limits
-        // Exclude node_modules, hidden dirs, and limit depth for performance
         const { stdout } = await spawnRead([
             'find',
             home,
@@ -432,13 +413,14 @@ async function autoDiscoverNpmProjects(): Promise<string[]> {
             '*/.*',
         ]);
         const files = stdout.trim().split('\n').filter(Boolean);
-        // Return unique directories containing package.json
         const dirs = files.map((f: string) => f.substring(0, f.lastIndexOf('/')));
-        return Array.from(new Set(dirs));
+        return [...new Set(dirs)];
     } catch (_e) {
         return [];
     }
 }
+
+// ── OSV vulnerability scanning ────────────────────────────────────────────────
 
 export async function checkOsv(
     packages: PkgInfo[],
@@ -448,59 +430,53 @@ export async function checkOsv(
     await _initSoup();
     if (!Soup || !soupSession) return [];
 
-    try {
-        const vulnerabilities: { id: string; pkgName: string }[] = [];
-        const seenIds = new Set<string>();
-        const batchSize = 500;
+    const vulnerabilities: { id: string; pkgName: string }[] = [];
+    const seenIds = new Set<string>();
+    const batchSize = 500;
 
-        for (let i = 0; i < packages.length; i += batchSize) {
-            const chunk = packages.slice(i, i + batchSize);
-            const queries = chunk.map((pkg) => {
-                if (pkg.commit && pkg.commit.length === 40) return { commit: pkg.commit };
-                const ecosystem = pkg.ecosystem || defaultEcosystem;
-                const query: any = { package: { name: pkg.name, ecosystem } };
-                if (pkg.version) query.version = pkg.version;
-                return query;
-            });
+    for (let i = 0; i < packages.length; i += batchSize) {
+        const chunk = packages.slice(i, i + batchSize);
+        const queries = chunk.map((pkg) => {
+            if (pkg.commit?.length === 40) return { commit: pkg.commit };
+            const ecosystem = pkg.ecosystem ?? defaultEcosystem;
+            const query: any = { package: { name: pkg.name, ecosystem } };
+            if (pkg.version) query.version = pkg.version;
+            return query;
+        });
 
-            const url = 'https://api.osv.dev/v1/querybatch';
-            const message = Soup.Message.new('POST', url);
+        try {
+            const message = Soup.Message.new('POST', 'https://api.osv.dev/v1/querybatch');
             const body = JSON.stringify({ queries });
             message.set_request_body_from_bytes(
                 'application/json',
                 new GLib.Bytes(new TextEncoder().encode(body)),
             );
 
-            try {
-                // B-3: pass the module-level cancellable so in-flight requests
-                // are aborted when cleanupChecks() is called on extension disable.
-                const bytes = await soupSession.send_and_read_async(
-                    message,
-                    GLib.PRIORITY_DEFAULT,
-                    _cancellable,
-                );
-                if (message.status_code !== 200) continue;
-                const data = JSON.parse(new TextDecoder().decode(bytes.get_data() as any));
-                if (data.results) {
-                    data.results.forEach((res: any, idx: number) => {
-                        if (res.vulns) {
-                            const pkgName = chunk[idx].name;
-                            res.vulns.forEach((v: any) => {
-                                const uniqueKey = `${pkgName}:${v.id}`;
-                                if (!seenIds.has(uniqueKey)) {
-                                    vulnerabilities.push({ id: v.id, pkgName });
-                                    seenIds.add(uniqueKey);
-                                }
-                            });
-                        }
-                    });
+            const bytes = await soupSession.send_and_read_async(
+                message,
+                GLib.PRIORITY_DEFAULT,
+                _cancellable,
+            );
+            if (message.status_code !== 200) continue;
+
+            const data = JSON.parse(new TextDecoder().decode(bytes.get_data()));
+            if (!data.results) continue;
+
+            data.results.forEach((res: any, idx: number) => {
+                if (!res.vulns) return;
+                const pkgName = chunk[idx].name;
+                for (const v of res.vulns) {
+                    const key = `${pkgName}:${v.id}`;
+                    if (!seenIds.has(key)) {
+                        vulnerabilities.push({ id: v.id, pkgName });
+                        seenIds.add(key);
+                    }
                 }
-            } catch (_err) {
-                /* skip */
-            }
+            });
+        } catch (_err) {
+            /* skip failed batch — proceed with remaining */
         }
-        return vulnerabilities.sort((a, b) => a.pkgName.localeCompare(b.pkgName));
-    } catch (_e) {
-        return [];
     }
+
+    return vulnerabilities.sort((a, b) => a.pkgName.localeCompare(b.pkgName));
 }

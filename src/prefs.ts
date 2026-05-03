@@ -3,10 +3,13 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk';
+
+// GNOME 45+: prefs module lives at the mixed-case path below.
+// Using the all-lowercase path is a common bug that silently fails at runtime.
 import {
     ExtensionPreferences,
     gettext as _,
-} from 'resource:///org/gnome/shell/extensions/prefs.js';
+} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import { detectDistroInfo, logDebug, DistroInfo } from './utils.js';
 import {
@@ -16,6 +19,7 @@ import {
     checkFlatpak,
     checkOsv,
     getInstalledPackages,
+    getOsvEcosystem,
 } from './checks.js';
 
 export default class PackageWatchdogPreferences extends ExtensionPreferences {
@@ -25,6 +29,7 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         super(metadata);
         this.initTranslations();
     }
+
     async fillPreferencesWindow(window: any) {
         const settings = this.getSettings();
         const distro = await detectDistroInfo();
@@ -35,6 +40,7 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         });
         window.add(page);
 
+        // ── Detected Distribution ────────────────────────────────────────────
         const distroGroup = new Adw.PreferencesGroup({ title: _('Detected Distribution') });
         page.add(distroGroup);
 
@@ -46,6 +52,7 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         distroRow.add_prefix(new Gtk.Image({ icon_name: 'computer-symbolic', pixel_size: 24 }));
         distroGroup.add(distroRow);
 
+        // ── Software Updates ─────────────────────────────────────────────────
         const sourcesGroup = new Adw.PreferencesGroup({
             title: _('Software Updates'),
             description: _('Configure system and application update monitoring.'),
@@ -58,7 +65,7 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
             zypper: _('Zypper — openSUSE / SLES'),
             'auto-detect': _('System packages (auto-detected)'),
         };
-        const managerLabel = managerLabelMap[distro.manager] || _('System packages');
+        const managerLabel = managerLabelMap[distro.manager] ?? _('System packages');
 
         const sysRow = new Adw.SwitchRow({
             title: managerLabel,
@@ -74,6 +81,7 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         settings.bind('check-flatpak', flatpakRow, 'active', Gio.SettingsBindFlags.DEFAULT);
         sourcesGroup.add(flatpakRow);
 
+        // ── Security Scanning ────────────────────────────────────────────────
         const securityGroup = new Adw.PreferencesGroup({
             title: _('Security Scanning'),
             description: _('Enable proactive vulnerability detection for installed software.'),
@@ -103,6 +111,7 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         npmAutoRow.sensitive = settings.get_boolean('check-npm');
         npmRow.bind_property('active', npmAutoRow, 'sensitive', GObject.BindingFlags.DEFAULT);
 
+        // ── Schedule ─────────────────────────────────────────────────────────
         const schedGroup = new Adw.PreferencesGroup({ title: _('Schedule') });
         page.add(schedGroup);
 
@@ -119,55 +128,35 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         settings.bind('check-interval-hours', intervalRow, 'value', Gio.SettingsBindFlags.DEFAULT);
         schedGroup.add(intervalRow);
 
+        // ── Git / npm Path Scanning ──────────────────────────────────────────
         const gitGroup = new Adw.PreferencesGroup({
             title: _('Git Repository Scanning'),
-            description: _('Match vulnerabilities by Git commit hash.'),
+            description: _(
+                'Match vulnerabilities by Git commit hash. Commit hashes are sent to osv.dev — no source code is transmitted.',
+            ),
         });
         page.add(gitGroup);
 
-        const gitPathsRow = new Adw.EntryRow({
-            title: _('Monitored Git Paths'),
-        });
-
-        // M-1: disclose that commit hashes are sent externally so users can make
-        // an informed choice when enabling Git repository scanning.
+        const gitPathsRow = new Adw.EntryRow({ title: _('Monitored Git Paths') });
         try {
-            // @ts-ignore
-            gitPathsRow.subtitle = _(
-                'Commit hashes are sent to osv.dev to check for known vulnerabilities. No source code is transmitted.',
-            );
+            (gitPathsRow as any).show_apply_button = true;
+            (gitPathsRow as any).placeholder_text = 'e.g. /home/user/projects,/home/user/work';
         } catch (_e) {
-            /* subtitle not supported on this Adw version */
+            /* older Adw version — ignore */
         }
-
-        // Use safe property setting for compatibility
-        try {
-            // @ts-ignore
-            gitPathsRow.show_apply_button = true;
-            // @ts-ignore
-            gitPathsRow.placeholder_text = 'e.g. /home/user/projects,/home/user/work';
-        } catch (e) {
-            logDebug('Prefs', `Safe property setting failed: ${e}`, settings);
-        }
-
         settings.bind('monitored-git-paths', gitPathsRow, 'text', Gio.SettingsBindFlags.DEFAULT);
         gitGroup.add(gitPathsRow);
 
-        const npmPathsRow = new Adw.EntryRow({
-            title: _('Monitored npm Paths'),
-        });
+        const npmPathsRow = new Adw.EntryRow({ title: _('Monitored npm Paths') });
         try {
-            // @ts-ignore
-            npmPathsRow.show_apply_button = true;
-            // @ts-ignore
-            npmPathsRow.placeholder_text = 'e.g. /home/user/projects,/home/user/work';
+            (npmPathsRow as any).show_apply_button = true;
+            (npmPathsRow as any).placeholder_text = 'e.g. /home/user/projects,/home/user/work';
         } catch (_e) {
             /* ignore */
         }
         settings.bind('monitored-npm-paths', npmPathsRow, 'text', Gio.SettingsBindFlags.DEFAULT);
         gitGroup.add(npmPathsRow);
 
-        // Disable manual paths if auto-discover is on
         const updateNpmPathsSensitivity = () => {
             npmPathsRow.sensitive =
                 settings.get_boolean('check-npm') && !settings.get_boolean('npm-auto-discover');
@@ -183,6 +172,7 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
             this._handlerIds = [];
         });
 
+        // ── Debug ────────────────────────────────────────────────────────────
         const debugGroup = new Adw.PreferencesGroup({
             title: _('Debugging & Logs'),
             description: _('Log operations to the system journal.'),
@@ -196,6 +186,7 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         settings.bind('debug-mode', debugRow, 'active', Gio.SettingsBindFlags.DEFAULT);
         debugGroup.add(debugRow);
 
+        // ── Actions ──────────────────────────────────────────────────────────
         const actionsGroup = new Adw.PreferencesGroup({ title: _('Actions') });
         page.add(actionsGroup);
 
@@ -204,15 +195,13 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
             subtitle: _('Run update check immediately'),
             activatable: true,
         });
-        const checkNowPrefix = new Gtk.Image({
-            icon_name: 'view-refresh-symbolic',
-            pixel_size: 24,
-        });
-        checkNowRow.add_prefix(checkNowPrefix);
+        checkNowRow.add_prefix(
+            new Gtk.Image({ icon_name: 'view-refresh-symbolic', pixel_size: 24 }),
+        );
         const checkNowSuffix = new Gtk.Image({ icon_name: 'go-next-symbolic', pixel_size: 16 });
         checkNowRow.add_suffix(checkNowSuffix);
         checkNowRow.connect('activated', () =>
-            this._doCheckNow(window, distro, checkNowRow, checkNowPrefix, checkNowSuffix),
+            this._doCheckNow(window, distro, checkNowRow, checkNowSuffix),
         );
         actionsGroup.add(checkNowRow);
 
@@ -231,40 +220,36 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         actionsGroup.add(cveCheckNowRow);
     }
 
-    async _doCheckNow(window: any, distro: DistroInfo, row: any, prefix: any, suffix: any) {
+    async _doCheckNow(window: any, distro: DistroInfo, row: any, suffix: any) {
         if (!row.activatable) return;
         row.activatable = false;
-        const origPrefix = prefix.icon_name;
-        prefix.icon_name = 'system-run-symbolic';
         suffix.icon_name = 'media-playback-pause-symbolic';
 
         window.add_toast(new Adw.Toast({ title: _('Checking for updates…'), timeout: 2 }));
 
         try {
             logDebug('Prefs', 'Starting manual check...', this.getSettings());
-            const [sysUpdates, flatpakResult] = await Promise.all([
-                distro.manager === 'dnf'
-                    ? checkDnf()
-                    : distro.manager === 'apt'
-                      ? checkApt()
-                      : distro.manager === 'zypper'
-                        ? checkZypper()
-                        : checkDnf(),
-                checkFlatpak(),
-            ]);
 
+            let sysUpdates: string[];
+            if (distro.manager === 'dnf') {
+                sysUpdates = await checkDnf();
+            } else if (distro.manager === 'zypper') {
+                sysUpdates = await checkZypper();
+            } else {
+                sysUpdates = await checkApt();
+            }
+
+            const flatpakResult = await checkFlatpak();
             const total = sysUpdates.length + flatpakResult.total;
             const message =
                 total === 0 ? _('System is up to date!') : _('%d updates available').format(total);
             window.add_toast(new Adw.Toast({ title: message, timeout: 5 }));
-
-            prefix.icon_name = origPrefix;
             suffix.icon_name = 'emblem-ok-symbolic';
-        } catch (_e: any) {
+        } catch (e: any) {
             window.add_toast(
-                new Adw.Toast({ title: _('Error: %s').format(_e.message), timeout: 5 }),
+                new Adw.Toast({ title: _('Error: %s').format(e?.message ?? e), timeout: 5 }),
             );
-            prefix.icon_name = 'emblem-error-symbolic';
+            suffix.icon_name = 'dialog-error-symbolic';
         } finally {
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
                 row.activatable = true;
@@ -282,13 +267,14 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
 
         try {
             logDebug('Prefs', 'Starting manual CVE check...', this.getSettings());
-            const pkgs = await getInstalledPackages(distro.manager);
-            const { getOsvEcosystem } = await import('./checks.js');
-            const ecosystem = getOsvEcosystem(distro);
-            if (!ecosystem) throw new Error(_('Unsupported ecosystem'));
 
+            const ecosystem = getOsvEcosystem(distro);
+            if (!ecosystem) throw new Error(_('Unsupported ecosystem for OSV scanning'));
+
+            const pkgs = await getInstalledPackages(distro.manager);
             const cveDetails = await checkOsv(pkgs, ecosystem);
             const count = cveDetails.length;
+
             const message =
                 count > 0
                     ? _('%d security alerts found!').format(count)
@@ -297,11 +283,14 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
 
             prefix.icon_name = count > 0 ? 'security-high-symbolic' : 'emblem-ok-symbolic';
             suffix.icon_name = 'emblem-ok-symbolic';
-        } catch (_e: any) {
+        } catch (e: any) {
             window.add_toast(
-                new Adw.Toast({ title: _('CVE Check Error: %s').format(_e.message), timeout: 5 }),
+                new Adw.Toast({
+                    title: _('CVE Check Error: %s').format(e?.message ?? e),
+                    timeout: 5,
+                }),
             );
-            prefix.icon_name = 'emblem-error-symbolic';
+            prefix.icon_name = 'dialog-error-symbolic';
         } finally {
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
                 row.activatable = true;

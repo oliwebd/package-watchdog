@@ -10,11 +10,11 @@
   },
   "homepage": "https://github.com/oliwebd/package-watchdog#readme",
   "scripts": {
-    "build": "mkdir -p dist && tsx build.ts && cp metadata.json dist/ && cp -r schemas dist/",
-    "watch": "tsx build.ts --watch",
-    "lint": "eslint 'src/**/*.{js,ts}' 'build.ts'",
-    "format": "prettier --write 'src/**/*.{js,ts}' 'build.ts'",
-    "pack": "pnpm run build && glib-compile-schemas dist/schemas/ && gnome-extensions pack --extra-source=dist/schemas --force dist/",
+    "build": "mkdir -p dist && tsc && cp src/stylesheet.css dist/ && cp metadata.json dist/ && cp -r schemas dist/",
+    "watch": "tsc --watch",
+    "lint": "eslint 'src/**/*.ts'",
+    "format": "prettier --write 'src/**/*.ts'",
+    "pack": "pnpm run build && glib-compile-schemas dist/schemas/ && gnome-extensions pack --force dist/",
     "deploy": "pnpm run pack && gnome-extensions install --force package-watchdog@oliwebd.github.com.shell-extension.zip && gnome-extensions enable package-watchdog@oliwebd.github.com"
   },
   "keywords": [
@@ -32,14 +32,11 @@
   "license": "GPL-3.0-or-later",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^25.6.0",
-    "esbuild": "^0.28.0",
     "eslint": "^10.2.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.5",
     "globals": "^17.5.0",
     "prettier": "^3.8.3",
-    "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.0"
   }

@@ -14,6 +14,7 @@ import {
     getFlatpakPkgInfo,
     getLocalGitRepoCommits,
     getNpmPkgInfo,
+    getOsvEcosystem,
     cleanupChecks,
     type FlatpakUpdateResult,
 } from './checks.js';
@@ -24,7 +25,6 @@ export default class PackageWatchdogExtension extends Extension {
     private _timeoutId: number | null = null;
     private _initialTimeoutId: number | null = null;
     private _distroInfo: DistroInfo | null = null;
-    private _lastCheckTime: Date | null = null;
     private _indicator: any = null;
     private _isChecking: boolean = false;
 
@@ -38,7 +38,7 @@ export default class PackageWatchdogExtension extends Extension {
         this._indicator = new (PackageWatchdogIndicator as any)(this);
         Main.panel.addToStatusArea('package-watchdog', this._indicator);
 
-        // Deferred initial check to avoid impact on shell startup/login
+        // Defer initial check to avoid competing for resources at shell startup
         this._initialTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
             this._scheduleChecks();
             this._initialTimeoutId = null;
@@ -47,18 +47,17 @@ export default class PackageWatchdogExtension extends Extension {
     }
 
     disable() {
-        if (this._timeoutId) {
+        if (this._timeoutId !== null) {
             GLib.Source.remove(this._timeoutId);
             this._timeoutId = null;
         }
-        if (this._initialTimeoutId) {
+        if (this._initialTimeoutId !== null) {
             GLib.Source.remove(this._initialTimeoutId);
             this._initialTimeoutId = null;
         }
 
         this._settings = null;
         this._distroInfo = null;
-        this._lastCheckTime = null;
 
         if (this._indicator) {
             this._indicator.destroy();
@@ -74,27 +73,26 @@ export default class PackageWatchdogExtension extends Extension {
 
     private _scheduleChecks() {
         const now = Math.floor(Date.now() / 1000);
-        const lastCheck = this._settings?.get_int64('last-check-timestamp') || 0;
-        const gapHours = (now - lastCheck) / 3600;
+        const lastCheck = this._settings?.get_int64('last-check-timestamp') ?? 0;
+        const gapHours = (now - Number(lastCheck)) / 3600;
 
         if (gapHours >= 6) {
             this._runUpdateCheck();
         } else {
             logDebug(
                 'Extension',
-                `Skipping startup check, last check was ${gapHours.toFixed(1)}h ago`,
+                `Skipping startup check — last check was ${gapHours.toFixed(1)}h ago`,
                 this._settings,
             );
-            // Even if we skip, we should ensure the UI is in a "Ready" state
+            // Still refresh the UI with distro/source info
             if (this._indicator) {
                 this._getDistroInfo().then((info) => {
                     this._indicator.updateInfo(info);
-                });
+                }).catch(() => {/* ignore */});
             }
         }
 
-        const intervalHours = this._settings?.get_int('check-interval-hours') || 4;
-
+        const intervalHours = this._settings?.get_int('check-interval-hours') ?? 4;
         this._timeoutId = GLib.timeout_add_seconds(
             GLib.PRIORITY_DEFAULT,
             intervalHours * 3600,
@@ -105,37 +103,36 @@ export default class PackageWatchdogExtension extends Extension {
         );
     }
 
-    private async _getDistroInfo(): Promise<any> {
+    private async _getDistroInfo(): Promise<{ lastCheck: string; distro: string; sources: string }> {
         const now = Math.floor(Date.now() / 1000);
-        const cachedName = this._settings?.get_string('cached-distro-name') || '';
-        const cachedTime = this._settings?.get_int64('cached-distro-timestamp') || 0;
+        const cachedName = this._settings?.get_string('cached-distro-name') ?? '';
+        const cachedTime = Number(this._settings?.get_int64('cached-distro-timestamp') ?? 0);
         const daysSinceCache = (now - cachedTime) / (24 * 3600);
 
         if (cachedName && daysSinceCache < 7) {
             logDebug('Extension', 'Using cached distro info', this._settings);
-            return {
-                lastCheck: this._getLastCheckTimeString(),
-                distro: cachedName,
-                sources: this._getMonitoringSourcesString(),
-            };
+        } else {
+            const info = await detectDistroInfo();
+            this._distroInfo = info;
+            this._settings?.set_string('cached-distro-name', info.name);
+            this._settings?.set_int64('cached-distro-timestamp', BigInt(now));
         }
 
-        const info = await detectDistroInfo();
-        this._distroInfo = info;
-        this._settings?.set_string('cached-distro-name', info.name);
-        this._settings?.set_int64('cached-distro-timestamp', BigInt(now));
+        if (!this._distroInfo) {
+            this._distroInfo = await detectDistroInfo();
+        }
 
         return {
             lastCheck: this._getLastCheckTimeString(),
-            distro: info.name,
+            distro: cachedName || this._distroInfo.name,
             sources: this._getMonitoringSourcesString(),
         };
     }
 
     private _getLastCheckTimeString(): string {
-        const lastCheck = this._settings?.get_int64('last-check-timestamp') || 0;
+        const lastCheck = Number(this._settings?.get_int64('last-check-timestamp') ?? 0);
         if (lastCheck === 0) return _('Never');
-        return new Date(Number(lastCheck) * 1000).toLocaleTimeString([], {
+        return new Date(lastCheck * 1000).toLocaleTimeString([], {
             hour: '2-digit',
             minute: '2-digit',
         });
@@ -143,30 +140,30 @@ export default class PackageWatchdogExtension extends Extension {
 
     private _getMonitoringSourcesString(): string {
         const s = this._settings;
-        const sources = [];
+        const sources: string[] = [];
         if (s?.get_boolean('check-system'))
-            sources.push(this._distroInfo?.manager.toUpperCase() || 'System');
+            sources.push(this._distroInfo?.manager.toUpperCase() ?? 'System');
         if (s?.get_boolean('check-flatpak')) sources.push('Flatpak');
         if (s?.get_boolean('check-cve')) sources.push('OSV Security');
         if (s?.get_boolean('check-npm')) sources.push(_('npm Security'));
         return sources.length > 0 ? sources.join(', ') : _('None');
     }
 
-    async _runUpdateCheck() {
+    async _runUpdateCheck(): Promise<number> {
         if (this._isChecking) return 0;
         this._isChecking = true;
 
         try {
-            logDebug('Extension', 'Starting background check workflow...', this._settings);
+            logDebug('Extension', 'Starting background check…', this._settings);
 
             if (!this._distroInfo) this._distroInfo = await detectDistroInfo();
             if (this._indicator) this._indicator.setBusy(true);
 
             const s = this._settings;
             const checkSys = s?.get_boolean('check-system') ?? true;
-            const checkFlatpakE = s?.get_boolean('check-flatpak') ?? true;
-            const checkCveE = s?.get_boolean('check-cve') ?? false;
-            const checkNpmE = s?.get_boolean('check-npm') ?? false;
+            const checkFlatpakEnabled = s?.get_boolean('check-flatpak') ?? true;
+            const checkCveEnabled = s?.get_boolean('check-cve') ?? false;
+            const checkNpmEnabled = s?.get_boolean('check-npm') ?? false;
             const autoNpm = s?.get_boolean('npm-auto-discover') ?? false;
 
             let sysUpdates: string[] = [];
@@ -174,17 +171,18 @@ export default class PackageWatchdogExtension extends Extension {
             let cveDetails: { id: string; pkgName: string }[] = [];
 
             if (checkSys && this._distroInfo) {
-                const distro = this._distroInfo;
-                if (distro.manager === 'dnf') {
+                const manager = this._distroInfo.manager;
+                if (manager === 'dnf') {
                     sysUpdates = await checkDnf();
                     sysLabel = 'DNF package';
-                } else if (distro.manager === 'apt') {
+                } else if (manager === 'apt') {
                     sysUpdates = await checkApt();
                     sysLabel = 'APT package';
-                } else if (distro.manager === 'zypper') {
+                } else if (manager === 'zypper') {
                     sysUpdates = await checkZypper();
                     sysLabel = 'Zypper package';
                 } else {
+                    // auto-detect: try apt then zypper
                     sysUpdates = await checkApt();
                     sysLabel = _('APT package');
                     if (sysUpdates.length === 0) {
@@ -194,28 +192,26 @@ export default class PackageWatchdogExtension extends Extension {
                 }
             }
 
-            const flatpakResult = checkFlatpakE
+            const flatpakResult: FlatpakUpdateResult = checkFlatpakEnabled
                 ? await checkFlatpak()
                 : { apps: [], runtimes: [], total: 0 };
 
-            if (checkCveE && this._distroInfo) {
-                const { getOsvEcosystem } = await import('./checks.js');
+            if (checkCveEnabled && this._distroInfo) {
                 const ecosystem = getOsvEcosystem(this._distroInfo);
-                const gitPaths = s?.get_string('monitored-git-paths') || '';
-                const npmPaths = s?.get_string('monitored-npm-paths') || '';
+                const gitPaths = s?.get_string('monitored-git-paths') ?? '';
+                const npmPaths = s?.get_string('monitored-npm-paths') ?? '';
 
-                if (ecosystem || gitPaths || (checkNpmE && npmPaths)) {
+                if (ecosystem || gitPaths || (checkNpmEnabled && (autoNpm || npmPaths))) {
                     const pkgs = await getInstalledPackages(this._distroInfo.manager, gitPaths);
-                    if (checkFlatpakE) {
+                    if (checkFlatpakEnabled) {
                         pkgs.push(...(await getFlatpakPkgInfo(gitPaths)));
                     }
                     if (gitPaths) {
                         pkgs.push(...(await getLocalGitRepoCommits(gitPaths)));
                     }
-                    if (checkNpmE) {
+                    if (checkNpmEnabled) {
                         pkgs.push(...(await getNpmPkgInfo(npmPaths, autoNpm)));
                     }
-
                     cveDetails = await checkOsv(pkgs, ecosystem);
                 }
             }
@@ -223,6 +219,7 @@ export default class PackageWatchdogExtension extends Extension {
             const sysCount = sysUpdates.length;
             const cveCount = cveDetails.length;
             const total = sysCount + flatpakResult.total;
+
             this._settings?.set_int64(
                 'last-check-timestamp',
                 BigInt(Math.floor(Date.now() / 1000)),
@@ -235,25 +232,24 @@ export default class PackageWatchdogExtension extends Extension {
                 if (total === 0 && cveCount === 0) {
                     this._indicator.updateStatus(0, _('System is up to date'), 0, [], []);
                 } else {
-                    const parts = [];
+                    const parts: string[] = [];
                     if (sysCount > 0)
                         parts.push(`${sysCount} ${sysLabel}${sysCount !== 1 ? 's' : ''}`);
-                    if (flatpakResult.apps.length > 0) {
+                    if (flatpakResult.apps.length > 0)
                         parts.push(
                             `${flatpakResult.apps.length} Flatpak app${flatpakResult.apps.length !== 1 ? 's' : ''}`,
                         );
-                    }
-                    if (flatpakResult.runtimes.length > 0) {
+                    if (flatpakResult.runtimes.length > 0)
                         parts.push(
                             `${flatpakResult.runtimes.length} Flatpak runtime${flatpakResult.runtimes.length !== 1 ? 's' : ''}`,
                         );
-                    }
 
                     let statusText =
                         parts.length > 0
                             ? _('%s available').format(parts.join(', '))
                             : _('Updated');
-                    if (cveCount > 0) statusText += _(' (%s security alerts)').format(cveCount);
+                    if (cveCount > 0)
+                        statusText += _(' (%s security alerts)').format(cveCount);
 
                     const updateList = [
                         ...sysUpdates,
@@ -277,7 +273,8 @@ export default class PackageWatchdogExtension extends Extension {
 
             return total + cveCount;
         } catch (e: any) {
-            logDebug('Extension', `Error during check: ${e.message}`, this._settings);
+            logDebug('Extension', `Error during check: ${e?.message ?? e}`, this._settings);
+            if (this._indicator) this._indicator.setBusy(false);
             return 0;
         } finally {
             this._isChecking = false;
@@ -290,20 +287,17 @@ export default class PackageWatchdogExtension extends Extension {
             if (!this._distroInfo) this._distroInfo = await detectDistroInfo();
             if (!this._distroInfo) return;
 
-            this._indicator.setBusy(true, _('Scanning for security CVEs...'));
+            this._indicator.setBusy(true, _('Scanning for security CVEs…'));
 
-            const { getOsvEcosystem } = await import('./checks.js');
             const ecosystem = getOsvEcosystem(this._distroInfo);
-            const gitPaths = this._settings?.get_string('monitored-git-paths') || '';
-
-            // C-2: read npm settings so the manual scan mirrors the scheduled scan
-            const checkNpmE = this._settings?.get_boolean('check-npm') ?? false;
-            const autoNpm   = this._settings?.get_boolean('npm-auto-discover') ?? false;
-            const npmPaths  = this._settings?.get_string('monitored-npm-paths') || '';
-            const npmEnabled = checkNpmE && (autoNpm || npmPaths.length > 0);
+            const gitPaths = this._settings?.get_string('monitored-git-paths') ?? '';
+            const checkNpmEnabled = this._settings?.get_boolean('check-npm') ?? false;
+            const autoNpm = this._settings?.get_boolean('npm-auto-discover') ?? false;
+            const npmPaths = this._settings?.get_string('monitored-npm-paths') ?? '';
+            const npmEnabled = checkNpmEnabled && (autoNpm || npmPaths.length > 0);
 
             if (!ecosystem && !gitPaths && !npmEnabled) {
-                this._indicator.updateStatus(0, _('Security scan not supported'), 0);
+                this._indicator.updateStatus(0, _('Security scan not supported for this distro'), 0);
                 this._indicator.setBusy(false);
                 return;
             }
@@ -315,8 +309,7 @@ export default class PackageWatchdogExtension extends Extension {
             if (gitPaths) {
                 pkgs.push(...(await getLocalGitRepoCommits(gitPaths)));
             }
-            // C-2: include npm packages in the manual CVE scan
-            if (checkNpmE) {
+            if (checkNpmEnabled) {
                 pkgs.push(...(await getNpmPkgInfo(npmPaths, autoNpm)));
             }
 
@@ -325,28 +318,33 @@ export default class PackageWatchdogExtension extends Extension {
 
             this._indicator.updateStatus(
                 0,
-                count > 0 ? _('%d security alerts').format(count) : _('Security check clear'),
+                count > 0
+                    ? _('%d security alerts').format(count)
+                    : _('Security check clear'),
                 count,
                 cveDetails,
                 [],
             );
             this._indicator.setBusy(false);
 
-            if (count > 0) this._notify(0, '', { apps: [], runtimes: [], total: 0 }, count);
+            if (count > 0) {
+                this._notify(0, '', { apps: [], runtimes: [], total: 0 }, count);
+            }
         } catch (e: any) {
-            logDebug('Extension', `CVE Check Error: ${e.message}`, this._settings);
-            this._indicator.setBusy(false);
+            logDebug('Extension', `CVE Check Error: ${e?.message ?? e}`, this._settings);
+            this._indicator?.setBusy(false);
         }
     }
 
     _openUpdateManager() {
         try {
+            // Try generic appstream URI first (GNOME Software, etc.)
             try {
                 Gio.AppInfo.launch_default_for_uri('appstream://updates', null);
                 this._scheduleRefresh();
                 return;
             } catch (_e) {
-                /* fall through to manual managers */
+                /* fall through */
             }
 
             const managers = [
@@ -364,13 +362,13 @@ export default class PackageWatchdogExtension extends Extension {
                             _('Update Manager'),
                             Gio.AppInfoCreateFlags.NONE,
                         );
-                        if (app && app.launch([], null)) {
+                        if (app?.launch([], null)) {
                             this._scheduleRefresh();
                             return;
                         }
                     }
                 } catch {
-                    /* skip */
+                    /* try next */
                 }
             }
             this._openTerminalUpdate();
@@ -380,30 +378,27 @@ export default class PackageWatchdogExtension extends Extension {
     }
 
     private _scheduleRefresh() {
-        if (this._timeoutId) {
+        if (this._timeoutId !== null) {
             GLib.Source.remove(this._timeoutId);
             this._timeoutId = null;
         }
-
-        // Refresh every 30s for 5 minutes to catch GUI update manager finishing
         let remaining = 10;
         this._timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 30, () => {
             this._runUpdateCheck();
             remaining--;
-            const continueRunning = remaining > 0;
-            if (!continueRunning) {
+            if (remaining <= 0) {
                 this._timeoutId = null;
                 this._scheduleChecks();
+                return GLib.SOURCE_REMOVE;
             }
-            return continueRunning ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
+            return GLib.SOURCE_CONTINUE;
         });
     }
 
     _openTerminalUpdate() {
-        const manager = this._distroInfo?.manager || 'dnf';
+        const manager = this._distroInfo?.manager ?? 'dnf';
         const checkFlatpakEnabled = this._settings?.get_boolean('check-flatpak') ?? true;
 
-        // Build update script
         const lines: string[] = [
             '#!/bin/bash',
             'echo "══════════════════════════════════════"',
@@ -435,7 +430,11 @@ export default class PackageWatchdogExtension extends Extension {
                 );
                 break;
             default:
-                lines.push('echo "▶ Updating system packages..."', 'echo', 'sudo dnf upgrade -y');
+                lines.push(
+                    'echo "▶ Updating system packages..."',
+                    'echo',
+                    'sudo dnf upgrade -y',
+                );
         }
 
         if (checkFlatpakEnabled) {
@@ -456,19 +455,12 @@ export default class PackageWatchdogExtension extends Extension {
             'read -rp "Press Enter to close..."',
         );
 
-        // Write script to temp file to avoid all quoting issues
         const scriptPath = GLib.build_filenamev([GLib.get_tmp_dir(), 'package-watchdog-update.sh']);
         const file = Gio.File.new_for_path(scriptPath);
         const bytes = new TextEncoder().encode(lines.join('\n') + '\n');
-        file.replace_contents(
-            bytes,
-            null,
-            false,
-            Gio.FileCreateFlags.REPLACE_DESTINATION,
-            null,
-        );
+        file.replace_contents(bytes, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
 
-        // Try terminal emulators — ptyxis first (Fedora 43+), then fallbacks
+        // Try terminal emulators in preference order (ptyxis is default in Fedora 43+)
         const terminalConfigs: string[][] = [
             ['ptyxis', '--', 'bash', scriptPath],
             ['kgx', '--', 'bash', scriptPath],
@@ -486,17 +478,10 @@ export default class PackageWatchdogExtension extends Extension {
                     null,
                 );
                 if (success && pid) {
-                    if (this._indicator) {
-                        this._indicator.setBusy(true, _('Applying system updates...'));
-                    }
-
+                    this._indicator?.setBusy(true, _('Applying system updates…'));
                     GLib.child_watch_add(GLib.PRIORITY_DEFAULT, pid, () => {
                         GLib.spawn_close_pid(pid);
-                        logDebug(
-                            'Extension',
-                            'Terminal update finished, refreshing...',
-                            this._settings,
-                        );
+                        logDebug('Extension', 'Terminal update finished, refreshing…', this._settings);
                         this._runUpdateCheck().then((remaining: number) => {
                             if (remaining === 0) {
                                 Main.notify(
@@ -506,12 +491,12 @@ export default class PackageWatchdogExtension extends Extension {
                             } else {
                                 Main.notify(
                                     _('Package Watchdog'),
-                                    _('Update finished, but %d items still need attention.').format(
-                                        remaining,
-                                    ),
+                                    _(
+                                        'Update finished, but %d items still need attention.',
+                                    ).format(remaining),
                                 );
                             }
-                        });
+                        }).catch(() => {/* ignore */});
                     });
                     return;
                 }
@@ -527,27 +512,26 @@ export default class PackageWatchdogExtension extends Extension {
         flatpakResult: FlatpakUpdateResult,
         cveCount: number,
     ) {
-        const parts = [];
+        const parts: string[] = [];
         if (sysCount > 0) parts.push(`${sysCount} ${sysLabel}${sysCount !== 1 ? 's' : ''}`);
-        if (flatpakResult.apps.length > 0) {
+        if (flatpakResult.apps.length > 0)
             parts.push(
                 `${flatpakResult.apps.length} Flatpak app${flatpakResult.apps.length !== 1 ? 's' : ''}`,
             );
-        }
-        if (flatpakResult.runtimes.length > 0) {
+        if (flatpakResult.runtimes.length > 0)
             parts.push(
                 `${flatpakResult.runtimes.length} Flatpak runtime${flatpakResult.runtimes.length !== 1 ? 's' : ''}`,
             );
-        }
 
         let title = _('Updates Available');
-        let body = _('%s ready to install.').format(parts.join(' and '));
+        let body = parts.length > 0 ? _('%s ready to install.').format(parts.join(' and ')) : '';
 
         if (cveCount > 0) {
             title = _('Security Alert');
             const cveText = _('%d security vulnerabilities detected.').format(cveCount);
             body = body ? `${body}\n\n${cveText}` : cveText;
         }
-        Main.notify(title, body);
+
+        if (title && body) Main.notify(title, body);
     }
 }

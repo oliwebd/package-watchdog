@@ -81,26 +81,26 @@ declare module 'gi://Gio' {
         class Cancellable {
             constructor();
             cancel(): void;
+            is_cancelled(): boolean;
         }
 
         class Subprocess {
             static new(argv: string[], flags: number): Subprocess;
             communicate_utf8_async(
-                stdin: any,
-                cancellable: any,
-                callback?: any,
+                stdin: string | null,
+                cancellable: Cancellable | null,
             ): Promise<[string, string]>;
             communicate_utf8_finish(result: any): [string, string];
-            wait_async(cancellable: any, callback?: any): Promise<void>;
+            wait_async(cancellable: Cancellable | null): Promise<void>;
             wait_finish(result: any): void;
             get_exit_status(): number;
         }
 
         class File {
             static new_for_path(path: string): File;
+            query_exists(cancellable: Cancellable | null): boolean;
             load_contents_async(
-                cancellable: any,
-                callback?: any,
+                cancellable: Cancellable | null,
             ): Promise<[Uint8Array, string | null]>;
             load_contents_finish(result: any): [Uint8Array, string | null];
             replace_contents(
@@ -108,7 +108,7 @@ declare module 'gi://Gio' {
                 etag: string | null,
                 makeBackup: boolean,
                 flags: number,
-                cancellable: any,
+                cancellable: Cancellable | null,
             ): [boolean, string];
         }
 
@@ -121,6 +121,18 @@ declare module 'gi://Gio' {
             ): AppInfo | null;
             launch(files: any[], context: any): boolean;
         }
+
+        class Settings {
+            get_boolean(key: string): boolean;
+            get_string(key: string): string;
+            get_int(key: string): number;
+            get_int64(key: string): bigint;
+            set_string(key: string, value: string): void;
+            set_int64(key: string, value: bigint): void;
+            bind(key: string, object: any, property: string, flags: number): void;
+            connect(signal: string, callback: (...args: any[]) => void): number;
+            disconnect(handlerId: number): void;
+        }
     }
     export default Gio;
 }
@@ -128,8 +140,8 @@ declare module 'gi://Gio' {
 // ── GObject ──────────────────────────────────────────────────────────────────
 declare module 'gi://GObject' {
     namespace GObject {
-        function registerClass(target: any): any;
-        function registerClass(options: any, target: any): any;
+        function registerClass<T>(target: T): T;
+        function registerClass<T>(options: any, target: T): T;
 
         const BindingFlags: {
             DEFAULT: number;
@@ -137,6 +149,17 @@ declare module 'gi://GObject' {
             SYNC_CREATE: number;
             INVERT_BOOLEAN: number;
         };
+
+        class Object {
+            connect(signal: string, callback: (...args: any[]) => any): number;
+            disconnect(handlerId: number): void;
+            bind_property(
+                source_property: string,
+                target: Object,
+                target_property: string,
+                flags: number,
+            ): void;
+        }
     }
     export default GObject;
 }
@@ -144,28 +167,28 @@ declare module 'gi://GObject' {
 // ── St ───────────────────────────────────────────────────────────────────────
 declare module 'gi://St' {
     namespace St {
-        class BoxLayout {
-            constructor(params?: any);
+        class Widget {
+            visible: boolean;
+            add_style_class_name(name: string): void;
+            remove_style_class_name(name: string): void;
+            set_style(style: string): void;
+            insert_child_at_index(actor: any, index: number): void;
             add_child(actor: any): void;
             remove_child(actor: any): void;
         }
 
-        class Icon {
+        class BoxLayout extends Widget {
             constructor(params?: any);
-            icon_name: string;
-            style_class: string;
-            add_style_class_name(name: string): void;
-            remove_style_class_name(name: string): void;
         }
 
-        class Label {
+        class Icon extends Widget {
+            constructor(params?: any);
+            icon_name: string;
+        }
+
+        class Label extends Widget {
             constructor(params?: any);
             text: string;
-            visible: boolean;
-            style_class: string;
-            add_style_class_name(name: string): void;
-            remove_style_class_name(name: string): void;
-            set_style(style: string): void;
         }
     }
     export default St;
@@ -186,47 +209,52 @@ declare module 'gi://Clutter' {
 
 // ── Adw ──────────────────────────────────────────────────────────────────────
 declare module 'gi://Adw' {
+    import Gio from 'gi://Gio';
+    import GObject from 'gi://GObject';
+
     namespace Adw {
         class PreferencesPage {
             constructor(params?: any);
-            add(group: any): void;
+            title: string;
+            icon_name: string;
+            add(group: PreferencesGroup): void;
         }
         class PreferencesGroup {
             constructor(params?: any);
+            title: string;
+            description: string;
             add(row: any): void;
         }
-        class ActionRow {
+        class ActionRow extends GObject.Object {
             constructor(params?: any);
             title: string;
             subtitle: string;
             activatable: boolean;
             add_prefix(widget: any): void;
             add_suffix(widget: any): void;
-            connect(signal: string, callback: Function): number;
         }
-        class SwitchRow {
+        class SwitchRow extends ActionRow {
             constructor(params?: any);
             active: boolean;
             sensitive: boolean;
-            bind_property(
-                prop: string,
-                target: any,
-                targetProp: string,
-                flags: number,
-            ): void;
         }
-        class SpinRow {
+        class SpinRow extends ActionRow {
             constructor(params?: any);
             value: number;
         }
-        class EntryRow {
+        class EntryRow extends ActionRow {
             constructor(params?: any);
-            title: string;
             text: string;
             sensitive: boolean;
         }
         class Toast {
             constructor(params?: any);
+            title: string;
+            timeout: number;
+        }
+        class PreferencesWindow extends GObject.Object {
+            add(page: PreferencesPage): void;
+            add_toast(toast: Toast): void;
         }
     }
     export default Adw;
@@ -238,6 +266,7 @@ declare module 'gi://Gtk' {
         class Image {
             constructor(params?: any);
             icon_name: string;
+            pixel_size: number;
         }
         class Adjustment {
             constructor(params?: any);
@@ -248,20 +277,23 @@ declare module 'gi://Gtk' {
 
 // ── Soup ─────────────────────────────────────────────────────────────────────
 declare module 'gi://Soup?version=3.0' {
+    import GLib from 'gi://GLib';
+    import Gio from 'gi://Gio';
+
     namespace Soup {
         class Session {
             constructor();
             timeout: number;
             send_and_read_async(
-                message: any,
+                message: Message,
                 priority: number,
-                cancellable: any,
-            ): Promise<any>;
+                cancellable: Gio.Cancellable | null,
+            ): Promise<GLib.Bytes>;
         }
         class Message {
             static new(method: string, uri: string): Message;
             status_code: number;
-            set_request_body_from_bytes(contentType: string, bytes: any): void;
+            set_request_body_from_bytes(contentType: string, bytes: GLib.Bytes): void;
         }
     }
     export default Soup;
@@ -270,17 +302,21 @@ declare module 'gi://Soup?version=3.0' {
 // ── GNOME Shell resources ────────────────────────────────────────────────────
 
 declare module 'resource:///org/gnome/shell/ui/main.js' {
-    export const panel: any;
+    export const panel: {
+        addToStatusArea(id: string, indicator: any): void;
+    };
     export function notify(title: string, body: string): void;
 }
 
 declare module 'resource:///org/gnome/shell/extensions/extension.js' {
+    import Gio from 'gi://Gio';
+
     export class Extension {
         constructor(metadata: any);
         metadata: any;
         dir: any;
         path: string;
-        getSettings(schema?: string): any;
+        getSettings(schema?: string): Gio.Settings;
         initTranslations(): void;
         openPreferences(): void;
     }
@@ -288,18 +324,15 @@ declare module 'resource:///org/gnome/shell/extensions/extension.js' {
     export function ngettext(singular: string, plural: string, n: number): string;
 }
 
-/**
- * IMPORTANT: GNOME 45+ prefs use a different (mixed-case) resource path.
- * The correct path is /org/gnome/Shell/Extensions/js/extensions/prefs.js
- * NOT /org/gnome/shell/extensions/prefs.js (all lowercase).
- */
 declare module 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js' {
+    import Gio from 'gi://Gio';
+
     export class ExtensionPreferences {
         constructor(metadata: any);
         metadata: any;
         dir: any;
         path: string;
-        getSettings(schema?: string): any;
+        getSettings(schema?: string): Gio.Settings;
         initTranslations(): void;
     }
     export function gettext(text: string): string;
@@ -307,7 +340,9 @@ declare module 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js' {
 }
 
 declare module 'resource:///org/gnome/shell/ui/panelMenu.js' {
-    export class Button {
+    import GObject from 'gi://GObject';
+
+    export class Button extends GObject.Object {
         constructor(
             menuAlignment: number,
             nameText: string,
@@ -318,7 +353,10 @@ declare module 'resource:///org/gnome/shell/ui/panelMenu.js' {
             nameText: string,
             dontCreateMenu?: boolean,
         ): void;
-        menu: any;
+        menu: {
+            addMenuItem(item: any, position?: number): void;
+            removeAll(): void;
+        };
         add_child(actor: any): void;
         remove_child(actor: any): void;
         destroy(): void;
@@ -326,12 +364,14 @@ declare module 'resource:///org/gnome/shell/ui/panelMenu.js' {
 }
 
 declare module 'resource:///org/gnome/shell/ui/popupMenu.js' {
-    export class PopupMenuItem {
+    import GObject from 'gi://GObject';
+    import St from 'gi://St';
+
+    export class PopupMenuItem extends GObject.Object {
         constructor(text?: string, params?: any);
-        label: any;
+        label: St.Label;
         visible: boolean;
-        _icon?: any;
-        connect(signal: string, callback: Function): number;
+        _icon?: St.Icon;
         insert_child_at_index(actor: any, index: number): void;
         destroy(): void;
     }

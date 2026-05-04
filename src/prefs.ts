@@ -4,8 +4,6 @@ import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk';
 
-// GNOME 45+: prefs module lives at the mixed-case path below.
-// Using the all-lowercase path is a common bug that silently fails at runtime.
 import {
     ExtensionPreferences,
     gettext as _,
@@ -25,12 +23,7 @@ import {
 export default class PackageWatchdogPreferences extends ExtensionPreferences {
     private _handlerIds: number[] = [];
 
-    constructor(metadata: any) {
-        super(metadata);
-        this.initTranslations();
-    }
-
-    async fillPreferencesWindow(window: any) {
+    async fillPreferencesWindow(window: Adw.PreferencesWindow) {
         const settings = this.getSettings();
         const distro = await detectDistroInfo();
 
@@ -138,22 +131,10 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         page.add(gitGroup);
 
         const gitPathsRow = new Adw.EntryRow({ title: _('Monitored Git Paths') });
-        try {
-            (gitPathsRow as any).show_apply_button = true;
-            (gitPathsRow as any).placeholder_text = 'e.g. /home/user/projects,/home/user/work';
-        } catch (_e) {
-            /* older Adw version — ignore */
-        }
         settings.bind('monitored-git-paths', gitPathsRow, 'text', Gio.SettingsBindFlags.DEFAULT);
         gitGroup.add(gitPathsRow);
 
         const npmPathsRow = new Adw.EntryRow({ title: _('Monitored npm Paths') });
-        try {
-            (npmPathsRow as any).show_apply_button = true;
-            (npmPathsRow as any).placeholder_text = 'e.g. /home/user/projects,/home/user/work';
-        } catch (_e) {
-            /* ignore */
-        }
         settings.bind('monitored-npm-paths', npmPathsRow, 'text', Gio.SettingsBindFlags.DEFAULT);
         gitGroup.add(npmPathsRow);
 
@@ -220,7 +201,7 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         actionsGroup.add(cveCheckNowRow);
     }
 
-    async _doCheckNow(window: any, distro: DistroInfo, row: any, suffix: any) {
+    async _doCheckNow(window: Adw.PreferencesWindow, distro: DistroInfo, row: Adw.ActionRow, suffix: Gtk.Image) {
         if (!row.activatable) return;
         row.activatable = false;
         suffix.icon_name = 'media-playback-pause-symbolic';
@@ -259,7 +240,7 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         }
     }
 
-    async _doCveCheckNow(window: any, distro: DistroInfo, row: any, prefix: any, suffix: any) {
+    async _doCveCheckNow(window: Adw.PreferencesWindow, distro: DistroInfo, row: Adw.ActionRow, prefix: Gtk.Image, suffix: Gtk.Image) {
         if (!row.activatable) return;
         row.activatable = false;
         prefix.icon_name = 'system-run-symbolic';

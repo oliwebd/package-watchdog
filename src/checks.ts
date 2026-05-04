@@ -4,7 +4,7 @@ import { spawnRead, DistroInfo } from './utils.js';
 
 let Soup: any = null;
 let soupSession: any = null;
-let _cancellable: any = null;
+let _soupCancellable: Gio.Cancellable | null = null;
 
 async function _initSoup() {
     if (Soup) return;
@@ -13,7 +13,7 @@ async function _initSoup() {
         Soup = S;
         soupSession = new Soup.Session();
         soupSession.timeout = 30; // abort hung requests after 30 s
-        _cancellable = new Gio.Cancellable();
+        _soupCancellable = new Gio.Cancellable();
     } catch (_e) {
         /* Soup unavailable — OSV scans will be silently skipped */
     }
@@ -21,8 +21,8 @@ async function _initSoup() {
 
 /** Cancel any in-flight OSV requests and release Soup resources. */
 export function cleanupChecks() {
-    _cancellable?.cancel();
-    _cancellable = null;
+    _soupCancellable?.cancel();
+    _soupCancellable = null;
     soupSession = null;
     Soup = null;
 }
@@ -44,14 +44,12 @@ export function getOsvEcosystem(distro: DistroInfo): string {
 
 // ── System package manager checks ────────────────────────────────────────────
 
-export async function checkDnf(): Promise<string[]> {
+export async function checkDnf(cancellable: Gio.Cancellable | null = null): Promise<string[]> {
     try {
-        const { stdout, exitCode } = await spawnRead([
-            'dnf',
-            'check-update',
-            '--quiet',
-            '--refresh',
-        ]);
+        const { stdout, exitCode } = await spawnRead(
+            ['dnf', 'check-update', '--quiet', '--refresh'],
+            cancellable,
+        );
         const lines = stdout.split('\n').filter((l: string) => {
             const t = l.trim();
             return (
@@ -60,7 +58,7 @@ export async function checkDnf(): Promise<string[]> {
                 !t.toLowerCase().startsWith('updating and loading')
             );
         });
-        if (exitCode === 100 || lines.length > 0) {
+        if (exitCode === 100) {
             return lines.map((l: string) => l.trim().split(/\s+/)[0]).filter(Boolean);
         }
         return [];
@@ -69,26 +67,24 @@ export async function checkDnf(): Promise<string[]> {
     }
 }
 
-export async function checkApt(): Promise<string[]> {
+export async function checkApt(cancellable: Gio.Cancellable | null = null): Promise<string[]> {
     try {
-        const { stdout } = await spawnRead(['apt', 'list', '--upgradable', '--quiet=2']);
+        const { stdout } = await spawnRead(['apt', 'list', '--upgradable', '--quiet=2'], cancellable);
         return stdout
             .split('\n')
-            .filter((l: string) => l.trim().length > 0 && l.includes('/'))
+            .filter((l: string) => l.trim().length > 0 && l.includes('[upgradable from:'))
             .map((l: string) => l.split('/')[0]);
     } catch (_e) {
         return [];
     }
 }
 
-export async function checkZypper(): Promise<string[]> {
+export async function checkZypper(cancellable: Gio.Cancellable | null = null): Promise<string[]> {
     try {
-        const { stdout } = await spawnRead([
-            'zypper',
-            '--non-interactive',
-            '--quiet',
-            'list-updates',
-        ]);
+        const { stdout } = await spawnRead(
+            ['zypper', '--non-interactive', '--quiet', 'list-updates'],
+            cancellable,
+        );
         return stdout
             .split('\n')
             .filter((l: string) => l.startsWith('v |'))
@@ -105,13 +101,14 @@ export interface FlatpakUpdateResult {
     total: number;
 }
 
-export async function checkFlatpak(): Promise<FlatpakUpdateResult> {
+export async function checkFlatpak(
+    cancellable: Gio.Cancellable | null = null,
+): Promise<FlatpakUpdateResult> {
     try {
-        const { stdout: listOut } = await spawnRead([
-            'flatpak',
-            'list',
-            '--columns=application,active,options',
-        ]);
+        const { stdout: listOut } = await spawnRead(
+            ['flatpak', 'list', '--columns=application,active,options'],
+            cancellable,
+        );
 
         // Build a map: appId → [active-commit, alt-id-commit?]
         const installed = new Map<string, string[]>();
@@ -149,20 +146,14 @@ export async function checkFlatpak(): Promise<FlatpakUpdateResult> {
         };
 
         const [appResult, runtimeResult] = await Promise.all([
-            spawnRead([
-                'flatpak',
-                'remote-ls',
-                '--updates',
-                '--app',
-                '--columns=application,commit:f',
-            ]),
-            spawnRead([
-                'flatpak',
-                'remote-ls',
-                '--updates',
-                '--runtime',
-                '--columns=application,commit:f',
-            ]),
+            spawnRead(
+                ['flatpak', 'remote-ls', '--updates', '--app', '--columns=application,commit:f'],
+                cancellable,
+            ),
+            spawnRead(
+                ['flatpak', 'remote-ls', '--updates', '--runtime', '--columns=application,commit:f'],
+                cancellable,
+            ),
         ]);
 
         const apps = parseLines(appResult.stdout);
@@ -185,6 +176,7 @@ export interface PkgInfo {
 export async function getInstalledPackages(
     manager: string,
     monitoredPaths?: string,
+    cancellable: Gio.Cancellable | null = null,
 ): Promise<PkgInfo[]> {
     try {
         let argv: string[] = [];
@@ -225,11 +217,11 @@ export async function getInstalledPackages(
         }
 
         if (argv.length === 0) return [];
-        const { stdout } = await spawnRead(argv);
+        const { stdout } = await spawnRead(argv, cancellable);
         let pkgs = parse(stdout);
 
         if (monitoredPaths) {
-            pkgs = await _resolveLocalCommits(pkgs, monitoredPaths);
+            pkgs = await _resolveLocalCommits(pkgs, monitoredPaths, cancellable);
         }
 
         return pkgs;
@@ -238,13 +230,15 @@ export async function getInstalledPackages(
     }
 }
 
-export async function getFlatpakPkgInfo(monitoredPaths?: string): Promise<PkgInfo[]> {
+export async function getFlatpakPkgInfo(
+    monitoredPaths?: string,
+    cancellable: Gio.Cancellable | null = null,
+): Promise<PkgInfo[]> {
     try {
-        const { stdout } = await spawnRead([
-            'flatpak',
-            'list',
-            '--columns=application,version,active,options',
-        ]);
+        const { stdout } = await spawnRead(
+            ['flatpak', 'list', '--columns=application,version,active,options'],
+            cancellable,
+        );
         const results: PkgInfo[] = [];
 
         for (const line of stdout.trim().split('\n').filter(Boolean)) {
@@ -263,16 +257,22 @@ export async function getFlatpakPkgInfo(monitoredPaths?: string): Promise<PkgInf
             results.push({ name, version, commit: commit.length >= 7 ? commit : undefined });
         }
 
-        return monitoredPaths ? _resolveLocalCommits(results, monitoredPaths) : results;
+        return monitoredPaths
+            ? _resolveLocalCommits(results, monitoredPaths, cancellable)
+            : results;
     } catch (_e) {
         return [];
     }
 }
 
 /** Resolve short/missing commits by matching against local git repos. */
-async function _resolveLocalCommits(pkgs: PkgInfo[], pathsStr: string): Promise<PkgInfo[]> {
+async function _resolveLocalCommits(
+    pkgs: PkgInfo[],
+    pathsStr: string,
+    cancellable: Gio.Cancellable | null = null,
+): Promise<PkgInfo[]> {
     if (!pathsStr) return pkgs;
-    const localRepos = await getLocalGitRepoCommits(pathsStr);
+    const localRepos = await getLocalGitRepoCommits(pathsStr, cancellable);
     const repoMap = new Map<string, string>();
     for (const repo of localRepos) {
         repoMap.set(repo.name.replace('local:', '').toLowerCase(), repo.commit ?? '');
@@ -288,7 +288,10 @@ async function _resolveLocalCommits(pkgs: PkgInfo[], pathsStr: string): Promise<
     });
 }
 
-export async function getLocalGitRepoCommits(pathsStr: string): Promise<PkgInfo[]> {
+export async function getLocalGitRepoCommits(
+    pathsStr: string,
+    cancellable: Gio.Cancellable | null = null,
+): Promise<PkgInfo[]> {
     if (!pathsStr) return [];
     const paths = pathsStr
         .split(',')
@@ -298,27 +301,18 @@ export async function getLocalGitRepoCommits(pathsStr: string): Promise<PkgInfo[
 
     for (const path of paths) {
         try {
-            const { stdout } = await spawnRead([
-                'find',
-                path,
-                '-maxdepth',
-                '3',
-                '-name',
-                '.git',
-                '-type',
-                'd',
-            ]);
+            const { stdout } = await spawnRead(
+                ['find', path, '-maxdepth', '3', '-name', '.git', '-type', 'd'],
+                cancellable,
+            );
             for (const gitDir of stdout.trim().split('\n').filter(Boolean)) {
                 const repoPath = gitDir.replace(/\/\.git$/, '');
                 const folderName = repoPath.split('/').pop() ?? 'unknown-repo';
                 try {
-                    const { stdout: commitOut } = await spawnRead([
-                        'git',
-                        '-C',
-                        repoPath,
-                        'rev-parse',
-                        'HEAD',
-                    ]);
+                    const { stdout: commitOut } = await spawnRead(
+                        ['git', '-C', repoPath, 'rev-parse', 'HEAD'],
+                        cancellable,
+                    );
                     const commit = commitOut.trim();
                     if (commit.length === 40) {
                         results.push({ name: `local:${folderName}`, version: 'git-repo', commit });
@@ -337,9 +331,10 @@ export async function getLocalGitRepoCommits(pathsStr: string): Promise<PkgInfo[
 export async function getNpmPkgInfo(
     pathsStr: string,
     autoDiscover: boolean = false,
+    cancellable: Gio.Cancellable | null = null,
 ): Promise<PkgInfo[]> {
     const paths: string[] = autoDiscover
-        ? await _autoDiscoverNpmProjects()
+        ? await _autoDiscoverNpmProjects(cancellable)
         : pathsStr
               .split(',')
               .map((p: string) => p.trim())
@@ -350,19 +345,15 @@ export async function getNpmPkgInfo(
 
     for (const path of paths) {
         try {
-            const { stdout } = await spawnRead([
-                'find',
-                path,
-                '-maxdepth',
-                '3',
-                '-name',
-                'package.json',
-            ]);
+            const { stdout } = await spawnRead(
+                ['find', path, '-maxdepth', '3', '-name', 'package.json'],
+                cancellable,
+            );
             for (const jsonFile of stdout.trim().split('\n').filter(Boolean)) {
                 if (jsonFile.includes('node_modules')) continue;
                 try {
                     const file = Gio.File.new_for_path(jsonFile);
-                    const [contents] = await file.load_contents_async(null);
+                    const [contents] = await file.load_contents_async(cancellable);
                     if (!contents) continue;
                     const data = JSON.parse(new TextDecoder().decode(contents));
                     const deps = { ...data.dependencies, ...data.devDependencies };
@@ -395,23 +386,45 @@ function _extractNpmVersion(raw: string): string {
     return /^\d+\.\d+/.test(stripped) ? stripped : '';
 }
 
-async function _autoDiscoverNpmProjects(): Promise<string[]> {
+async function _autoDiscoverNpmProjects(
+    cancellable: Gio.Cancellable | null = null,
+): Promise<string[]> {
     try {
         const home = GLib.get_home_dir();
-        const { stdout } = await spawnRead([
-            'find',
-            home,
-            '-maxdepth',
-            '4',
-            '-name',
-            'package.json',
-            '-not',
-            '-path',
-            '*/node_modules/*',
-            '-not',
-            '-path',
-            '*/.*',
-        ]);
+        const candidateFolders = [
+            'Documents',
+            'Downloads',
+            'Desktop',
+            'Projects',
+            'Workspace',
+            'src',
+            'code',
+            'Development',
+        ];
+        
+        const searchPaths = candidateFolders
+            .map((f) => GLib.build_filenamev([home, f]))
+            .filter((p) => Gio.File.new_for_path(p).query_exists(null));
+
+        if (searchPaths.length === 0) return [];
+
+        const { stdout } = await spawnRead(
+            [
+                'find',
+                ...searchPaths,
+                '-maxdepth',
+                '3',
+                '-name',
+                'package.json',
+                '-not',
+                '-path',
+                '*/node_modules/*',
+                '-not',
+                '-path',
+                '*/.*',
+            ],
+            cancellable,
+        );
         const files = stdout.trim().split('\n').filter(Boolean);
         const dirs = files.map((f: string) => f.substring(0, f.lastIndexOf('/')));
         return [...new Set(dirs)];
@@ -455,7 +468,7 @@ export async function checkOsv(
             const bytes = await soupSession.send_and_read_async(
                 message,
                 GLib.PRIORITY_DEFAULT,
-                _cancellable,
+                _soupCancellable,
             );
             if (message.status_code !== 200) continue;
 

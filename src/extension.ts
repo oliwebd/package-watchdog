@@ -3,7 +3,7 @@ import Gio from 'gi://Gio';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
-import { detectDistroInfo, logDebug, DistroInfo } from './utils.js';
+import { detectDistroInfo, logDebug, DistroInfo, SignalTracker } from './utils.js';
 import {
     checkDnf,
     checkApt,
@@ -21,22 +21,25 @@ import {
 import { PackageWatchdogIndicator } from './indicator.js';
 
 export default class PackageWatchdogExtension extends Extension {
-    private _settings: any = null;
+    private _settings: Gio.Settings | null = null;
+    private _tracker: SignalTracker = new SignalTracker();
+    private _cancellable: Gio.Cancellable | null = null;
     private _timeoutId: number | null = null;
     private _initialTimeoutId: number | null = null;
     private _distroInfo: DistroInfo | null = null;
-    private _indicator: any = null;
+    private _indicator: PackageWatchdogIndicator | null = null;
     private _isChecking: boolean = false;
-
-    constructor(metadata: any) {
-        super(metadata);
-        this.initTranslations();
-    }
 
     enable() {
         this._settings = this.getSettings();
-        this._indicator = new (PackageWatchdogIndicator as any)(this);
+        this._cancellable = new Gio.Cancellable();
+        this._indicator = new PackageWatchdogIndicator(this);
         Main.panel.addToStatusArea('package-watchdog', this._indicator);
+
+        // Track settings changes
+        this._tracker.connect(this._settings, 'changed::check-interval-hours', () => {
+            this._reschedule();
+        });
 
         // Defer initial check to avoid competing for resources at shell startup
         this._initialTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
@@ -47,6 +50,9 @@ export default class PackageWatchdogExtension extends Extension {
     }
 
     disable() {
+        this._cancellable?.cancel();
+        this._cancellable = null;
+
         if (this._timeoutId !== null) {
             GLib.Source.remove(this._timeoutId);
             this._timeoutId = null;
@@ -56,6 +62,7 @@ export default class PackageWatchdogExtension extends Extension {
             this._initialTimeoutId = null;
         }
 
+        this._tracker.clear();
         this._settings = null;
         this._distroInfo = null;
 
@@ -71,9 +78,17 @@ export default class PackageWatchdogExtension extends Extension {
         this.openPreferences();
     }
 
+    private _reschedule() {
+        if (this._timeoutId !== null) {
+            GLib.Source.remove(this._timeoutId);
+            this._timeoutId = null;
+        }
+        this._scheduleChecks();
+    }
+
     private _scheduleChecks() {
         const now = Math.floor(Date.now() / 1000);
-        const lastCheck = this._settings?.get_int64('last-check-timestamp') ?? 0;
+        const lastCheck = this._settings?.get_int64('last-check-timestamp') ?? 0n;
         const gapHours = (now - Number(lastCheck)) / 3600;
 
         if (gapHours >= 6) {
@@ -87,7 +102,7 @@ export default class PackageWatchdogExtension extends Extension {
             // Still refresh the UI with distro/source info
             if (this._indicator) {
                 this._getDistroInfo().then((info) => {
-                    this._indicator.updateInfo(info);
+                    this._indicator?.updateInfo(info);
                 }).catch(() => {/* ignore */});
             }
         }
@@ -106,11 +121,14 @@ export default class PackageWatchdogExtension extends Extension {
     private async _getDistroInfo(): Promise<{ lastCheck: string; distro: string; sources: string }> {
         const now = Math.floor(Date.now() / 1000);
         const cachedName = this._settings?.get_string('cached-distro-name') ?? '';
-        const cachedTime = Number(this._settings?.get_int64('cached-distro-timestamp') ?? 0);
+        const cachedTime = Number(this._settings?.get_int64('cached-distro-timestamp') ?? 0n);
         const daysSinceCache = (now - cachedTime) / (24 * 3600);
 
         if (cachedName && daysSinceCache < 7) {
             logDebug('Extension', 'Using cached distro info', this._settings);
+            if (!this._distroInfo) {
+                this._distroInfo = await detectDistroInfo();
+            }
         } else {
             const info = await detectDistroInfo();
             this._distroInfo = info;
@@ -118,19 +136,15 @@ export default class PackageWatchdogExtension extends Extension {
             this._settings?.set_int64('cached-distro-timestamp', BigInt(now));
         }
 
-        if (!this._distroInfo) {
-            this._distroInfo = await detectDistroInfo();
-        }
-
         return {
             lastCheck: this._getLastCheckTimeString(),
-            distro: cachedName || this._distroInfo.name,
+            distro: this._distroInfo?.name ?? cachedName ?? _('Unknown'),
             sources: this._getMonitoringSourcesString(),
         };
     }
 
     private _getLastCheckTimeString(): string {
-        const lastCheck = Number(this._settings?.get_int64('last-check-timestamp') ?? 0);
+        const lastCheck = Number(this._settings?.get_int64('last-check-timestamp') ?? 0n);
         if (lastCheck === 0) return _('Never');
         return new Date(lastCheck * 1000).toLocaleTimeString([], {
             hour: '2-digit',
@@ -150,7 +164,7 @@ export default class PackageWatchdogExtension extends Extension {
     }
 
     async _runUpdateCheck(): Promise<number> {
-        if (this._isChecking) return 0;
+        if (this._isChecking || !this._cancellable || this._cancellable.is_cancelled()) return 0;
         this._isChecking = true;
 
         try {
@@ -173,27 +187,26 @@ export default class PackageWatchdogExtension extends Extension {
             if (checkSys && this._distroInfo) {
                 const manager = this._distroInfo.manager;
                 if (manager === 'dnf') {
-                    sysUpdates = await checkDnf();
+                    sysUpdates = await checkDnf(this._cancellable);
                     sysLabel = 'DNF package';
                 } else if (manager === 'apt') {
-                    sysUpdates = await checkApt();
+                    sysUpdates = await checkApt(this._cancellable);
                     sysLabel = 'APT package';
                 } else if (manager === 'zypper') {
-                    sysUpdates = await checkZypper();
+                    sysUpdates = await checkZypper(this._cancellable);
                     sysLabel = 'Zypper package';
                 } else {
-                    // auto-detect: try apt then zypper
-                    sysUpdates = await checkApt();
+                    sysUpdates = await checkApt(this._cancellable);
                     sysLabel = _('APT package');
                     if (sysUpdates.length === 0) {
-                        sysUpdates = await checkZypper();
+                        sysUpdates = await checkZypper(this._cancellable);
                         sysLabel = _('Zypper package');
                     }
                 }
             }
 
             const flatpakResult: FlatpakUpdateResult = checkFlatpakEnabled
-                ? await checkFlatpak()
+                ? await checkFlatpak(this._cancellable)
                 : { apps: [], runtimes: [], total: 0 };
 
             if (checkCveEnabled && this._distroInfo) {
@@ -202,15 +215,15 @@ export default class PackageWatchdogExtension extends Extension {
                 const npmPaths = s?.get_string('monitored-npm-paths') ?? '';
 
                 if (ecosystem || gitPaths || (checkNpmEnabled && (autoNpm || npmPaths))) {
-                    const pkgs = await getInstalledPackages(this._distroInfo.manager, gitPaths);
+                    const pkgs = await getInstalledPackages(this._distroInfo.manager, gitPaths, this._cancellable);
                     if (checkFlatpakEnabled) {
-                        pkgs.push(...(await getFlatpakPkgInfo(gitPaths)));
+                        pkgs.push(...(await getFlatpakPkgInfo(gitPaths, this._cancellable)));
                     }
                     if (gitPaths) {
-                        pkgs.push(...(await getLocalGitRepoCommits(gitPaths)));
+                        pkgs.push(...(await getLocalGitRepoCommits(gitPaths, this._cancellable)));
                     }
                     if (checkNpmEnabled) {
-                        pkgs.push(...(await getNpmPkgInfo(npmPaths, autoNpm)));
+                        pkgs.push(...(await getNpmPkgInfo(npmPaths, autoNpm, this._cancellable)));
                     }
                     cveDetails = await checkOsv(pkgs, ecosystem);
                 }
@@ -282,7 +295,7 @@ export default class PackageWatchdogExtension extends Extension {
     }
 
     async _runCveCheck() {
-        if (!this._indicator) return;
+        if (!this._indicator || !this._cancellable || this._cancellable.is_cancelled()) return;
         try {
             if (!this._distroInfo) this._distroInfo = await detectDistroInfo();
             if (!this._distroInfo) return;
@@ -302,15 +315,15 @@ export default class PackageWatchdogExtension extends Extension {
                 return;
             }
 
-            const pkgs = await getInstalledPackages(this._distroInfo.manager, gitPaths);
+            const pkgs = await getInstalledPackages(this._distroInfo.manager, gitPaths, this._cancellable);
             if (this._settings?.get_boolean('check-flatpak')) {
-                pkgs.push(...(await getFlatpakPkgInfo(gitPaths)));
+                pkgs.push(...(await getFlatpakPkgInfo(gitPaths, this._cancellable)));
             }
             if (gitPaths) {
-                pkgs.push(...(await getLocalGitRepoCommits(gitPaths)));
+                pkgs.push(...(await getLocalGitRepoCommits(gitPaths, this._cancellable)));
             }
             if (checkNpmEnabled) {
-                pkgs.push(...(await getNpmPkgInfo(npmPaths, autoNpm)));
+                pkgs.push(...(await getNpmPkgInfo(npmPaths, autoNpm, this._cancellable)));
             }
 
             const cveDetails = await checkOsv(pkgs, ecosystem);
@@ -338,7 +351,6 @@ export default class PackageWatchdogExtension extends Extension {
 
     _openUpdateManager() {
         try {
-            // Try generic appstream URI first (GNOME Software, etc.)
             try {
                 Gio.AppInfo.launch_default_for_uri('appstream://updates', null);
                 this._scheduleRefresh();
@@ -460,7 +472,6 @@ export default class PackageWatchdogExtension extends Extension {
         const bytes = new TextEncoder().encode(lines.join('\n') + '\n');
         file.replace_contents(bytes, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
 
-        // Try terminal emulators in preference order (ptyxis is default in Fedora 43+)
         const terminalConfigs: string[][] = [
             ['ptyxis', '--', 'bash', scriptPath],
             ['kgx', '--', 'bash', scriptPath],

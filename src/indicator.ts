@@ -4,28 +4,26 @@ import GObject from 'gi://GObject';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
+import type PackageWatchdogExtension from './extension.js';
 
-export const PackageWatchdogIndicator = GObject.registerClass(
-    class PackageWatchdogIndicator extends PanelMenu.Button {
-        // Use `declare` so TypeScript knows these exist without emitting
-        // class-field initializers that would conflict with GObject's property system.
-        declare private _ext: any;
-        declare private _box: any;
-        declare private _icon: any;
-        declare private _badge: any;
-        declare private _loadingLabel: any;
-        declare private _statusItem: any;
-        declare private _lastCheckItem: any;
-        declare private _distroItem: any;
-        declare private _sourcesItem: any;
-        declare private _cveItem: any;
-        declare private _cveSubMenu: any;
-        declare private _updateSubMenu: any;
-        declare private _savedIconName: string;
-        declare private _menuBuilt: boolean;
+class PackageWatchdogIndicatorInternal extends PanelMenu.Button {
+    private _ext: PackageWatchdogExtension;
+    private _box: St.BoxLayout;
+    private _icon: St.Icon;
+    private _badge: St.Label;
+    private _loadingLabel: St.Label;
+    private _statusItem: PopupMenu.PopupMenuItem | null = null;
+    private _lastCheckItem: PopupMenu.PopupMenuItem | null = null;
+    private _distroItem: PopupMenu.PopupMenuItem | null = null;
+    private _sourcesItem: PopupMenu.PopupMenuItem | null = null;
+    private _cveItem: PopupMenu.PopupMenuItem | null = null;
+    private _cveSubMenu: PopupMenu.PopupSubMenuMenuItem | null = null;
+    private _updateSubMenu: PopupMenu.PopupSubMenuMenuItem | null = null;
+    private _savedIconName: string;
+    private _menuBuilt: boolean;
 
-        _init(ext: any) {
-            super._init(0.5, _('Package Watchdog'), false);
+    constructor(ext: PackageWatchdogExtension) {
+        super(0.5, _('Package Watchdog'), false);
             this._ext = ext;
             this._menuBuilt = false;
             this._savedIconName = 'software-update-available-symbolic';
@@ -169,7 +167,7 @@ export const PackageWatchdogIndicator = GObject.registerClass(
             this._menuBuilt = true;
         }
 
-        private _createIconMenuItem(text: string, iconName: string) {
+        private _createIconMenuItem(text: string, iconName: string): PopupMenu.PopupMenuItem {
             const item = new PopupMenu.PopupMenuItem(text, { reactive: false });
             const icon = new St.Icon({
                 icon_name: iconName,
@@ -178,11 +176,11 @@ export const PackageWatchdogIndicator = GObject.registerClass(
             });
             item.insert_child_at_index(icon, 0);
             item.label.add_style_class_name('package-watchdog-info-text');
-            (item as any)._icon = icon;
+            item._icon = icon;
             return item;
         }
 
-        private _createActionItem(text: string, iconName: string) {
+        private _createActionItem(text: string, iconName: string): PopupMenu.PopupMenuItem {
             const item = new PopupMenu.PopupMenuItem(text);
             const icon = new St.Icon({ icon_name: iconName, style_class: 'popup-menu-icon' });
             item.insert_child_at_index(icon, 0);
@@ -201,7 +199,6 @@ export const PackageWatchdogIndicator = GObject.registerClass(
                 this._icon.icon_name = this._savedIconName;
                 this._icon.remove_style_class_name('package-watchdog-spinning');
                 this._loadingLabel.visible = false;
-                // Only show badge if there is a count to display
                 if (this._badge.text && this._badge.text !== '') {
                     this._badge.visible = true;
                 }
@@ -233,7 +230,6 @@ export const PackageWatchdogIndicator = GObject.registerClass(
             const totalAlerts = totalUpdates + cveCount;
             const isUrgent = cveCount > 0;
 
-            // Reset badge styles
             this._badge.remove_style_class_name('package-watchdog-badge-urgent');
             this._badge.remove_style_class_name('package-watchdog-badge-warning');
 
@@ -263,63 +259,71 @@ export const PackageWatchdogIndicator = GObject.registerClass(
 
             this._savedIconName = this._icon.icon_name;
 
-            // Strip any stray unicode indicator glyphs from status text
             const cleanStatus = statusText.replace(/[✓⚠⬆✕]/gu, '').trim();
             if (this._statusItem) this._statusItem.label.text = cleanStatus;
 
-            // ── CVE sub-menu ──────────────────────────────────────────────────
-            if (cveCount > 0 && cveDetails.length > 0) {
-                this._cveItem.label.text = _('%d security vulnerabilities').format(cveCount);
-                this._cveItem.label.add_style_class_name('package-watchdog-security-alert');
-                this._cveItem.visible = true;
+            // CVE sub-menu
+            if (this._cveItem && this._cveSubMenu) {
+                if (cveCount > 0 && cveDetails.length > 0) {
+                    this._cveItem.label.text = _('%d security vulnerabilities').format(cveCount);
+                    this._cveItem.label.add_style_class_name('package-watchdog-security-alert');
+                    this._cveItem.visible = true;
 
-                this._cveSubMenu.menu.removeAll();
-                const limit = 10;
-                cveDetails.slice(0, limit).forEach((detail) => {
-                    const idItem = new PopupMenu.PopupMenuItem(
-                        `${detail.pkgName}: ${detail.id}`,
-                        { reactive: false },
-                    );
-                    idItem.label.add_style_class_name('package-watchdog-info-text');
-                    idItem.label.set_style('font-family: monospace; font-size: 0.85em;');
-                    this._cveSubMenu.menu.addMenuItem(idItem);
-                });
-                if (cveDetails.length > limit) {
-                    const moreItem = new PopupMenu.PopupMenuItem(
-                        _('… and %d more').format(cveDetails.length - limit),
-                        { reactive: false },
-                    );
-                    moreItem.label.set_style('font-style: italic; opacity: 0.7;');
-                    this._cveSubMenu.menu.addMenuItem(moreItem);
+                    this._cveSubMenu.menu.removeAll();
+                    const limit = 10;
+                    cveDetails.slice(0, limit).forEach((detail) => {
+                        const idItem = new PopupMenu.PopupMenuItem(
+                            `${detail.pkgName}: ${detail.id}`,
+                            { reactive: false },
+                        );
+                        idItem.label.add_style_class_name('package-watchdog-info-text');
+                        idItem.label.set_style('font-family: monospace; font-size: 0.85em;');
+                        this._cveSubMenu?.menu.addMenuItem(idItem);
+                    });
+                    if (cveDetails.length > limit) {
+                        const moreItem = new PopupMenu.PopupMenuItem(
+                            _('… and %d more').format(cveDetails.length - limit),
+                            { reactive: false },
+                        );
+                        moreItem.label.set_style('font-style: italic; opacity: 0.7;');
+                        this._cveSubMenu.menu.addMenuItem(moreItem);
+                    }
+                    this._cveSubMenu.visible = true;
+                } else {
+                    this._cveItem.visible = false;
+                    this._cveSubMenu.visible = false;
                 }
-                this._cveSubMenu.visible = true;
-            } else {
-                this._cveItem.visible = false;
-                this._cveSubMenu.visible = false;
             }
 
-            // ── Update list sub-menu ──────────────────────────────────────────
-            if (totalUpdates > 0 && updateList.length > 0) {
-                this._updateSubMenu.menu.removeAll();
-                const limit = 10;
-                updateList.slice(0, limit).forEach((pkg) => {
-                    const pkgItem = new PopupMenu.PopupMenuItem(pkg, { reactive: false });
-                    pkgItem.label.add_style_class_name('package-watchdog-info-text');
-                    pkgItem.label.set_style('font-size: 0.9em;');
-                    this._updateSubMenu.menu.addMenuItem(pkgItem);
-                });
-                if (updateList.length > limit) {
-                    const moreItem = new PopupMenu.PopupMenuItem(
-                        _('… and %d more').format(updateList.length - limit),
-                        { reactive: false },
-                    );
-                    moreItem.label.set_style('font-style: italic; opacity: 0.7;');
-                    this._updateSubMenu.menu.addMenuItem(moreItem);
+            // Update list sub-menu
+            if (this._updateSubMenu) {
+                if (totalUpdates > 0 && updateList.length > 0) {
+                    this._updateSubMenu.menu.removeAll();
+                    const limit = 10;
+                    updateList.slice(0, limit).forEach((pkg) => {
+                        const pkgItem = new PopupMenu.PopupMenuItem(pkg, { reactive: false });
+                        pkgItem.label.add_style_class_name('package-watchdog-info-text');
+                        pkgItem.label.set_style('font-size: 0.9em;');
+                        this._updateSubMenu?.menu.addMenuItem(pkgItem);
+                    });
+                    if (updateList.length > limit) {
+                        const moreItem = new PopupMenu.PopupMenuItem(
+                            _('… and %d more').format(updateList.length - limit),
+                            { reactive: false },
+                        );
+                        moreItem.label.set_style('font-style: italic; opacity: 0.7;');
+                        this._updateSubMenu.menu.addMenuItem(moreItem);
+                    }
+                    this._updateSubMenu.visible = true;
+                } else {
+                    this._updateSubMenu.visible = false;
                 }
-                this._updateSubMenu.visible = true;
-            } else {
-                this._updateSubMenu.visible = false;
             }
         }
-    },
-);
+}
+
+const PackageWatchdogIndicatorClass = GObject.registerClass(PackageWatchdogIndicatorInternal);
+
+export const PackageWatchdogIndicator = PackageWatchdogIndicatorClass as typeof PackageWatchdogIndicatorInternal;
+export type PackageWatchdogIndicator = PackageWatchdogIndicatorInternal;
+

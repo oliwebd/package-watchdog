@@ -15,6 +15,12 @@
       <description>Whether to check for Flatpak application updates.</description>
     </key>
 
+    <key name="ignored-packages" type="s">
+      <default>''</default>
+      <summary>Ignored packages</summary>
+      <description>Comma-separated list of packages or keywords to ignore when checking for updates.</description>
+    </key>
+
     <key name="check-interval-hours" type="i">
       <default>4</default>
       <range min="1" max="24"/>

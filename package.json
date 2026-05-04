@@ -14,7 +14,7 @@
     "watch": "tsc --watch",
     "lint": "eslint 'src/**/*.ts'",
     "format": "prettier --write 'src/**/*.ts'",
-    "pack": "pnpm run build && glib-compile-schemas dist/schemas/ && gnome-extensions pack --force dist/",
+    "pack": "pnpm run build && glib-compile-schemas dist/schemas/ && gnome-extensions pack --force --extra-source=utils.js --extra-source=indicator.js --extra-source=checks.js dist/",
     "deploy": "pnpm run pack && gnome-extensions install --force package-watchdog@oliwebd.github.com.shell-extension.zip && gnome-extensions enable package-watchdog@oliwebd.github.com"
   },
   "keywords": [

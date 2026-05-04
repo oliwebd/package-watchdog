@@ -179,6 +179,9 @@ export default class PackageWatchdogExtension extends Extension {
             const checkCveEnabled = s?.get_boolean('check-cve') ?? false;
             const checkNpmEnabled = s?.get_boolean('check-npm') ?? false;
             const autoNpm = s?.get_boolean('npm-auto-discover') ?? false;
+            const ignoredPackagesStr = s?.get_string('ignored-packages') ?? '';
+            const ignoredPackages = ignoredPackagesStr.split(',').map((p: string) => p.trim()).filter(Boolean);
+            const isIgnored = (pkg: string) => ignoredPackages.some((ignored: string) => pkg.includes(ignored));
 
             let sysUpdates: string[] = [];
             let sysLabel = 'package';
@@ -203,11 +206,21 @@ export default class PackageWatchdogExtension extends Extension {
                         sysLabel = _('Zypper package');
                     }
                 }
+                
+                if (ignoredPackages.length > 0) {
+                    sysUpdates = sysUpdates.filter(pkg => !isIgnored(pkg));
+                }
             }
 
-            const flatpakResult: FlatpakUpdateResult = checkFlatpakEnabled
+            let flatpakResult: FlatpakUpdateResult = checkFlatpakEnabled
                 ? await checkFlatpak(this._cancellable)
                 : { apps: [], runtimes: [], total: 0 };
+                
+            if (ignoredPackages.length > 0 && checkFlatpakEnabled) {
+                flatpakResult.apps = flatpakResult.apps.filter(pkg => !isIgnored(pkg));
+                flatpakResult.runtimes = flatpakResult.runtimes.filter(pkg => !isIgnored(pkg));
+                flatpakResult.total = flatpakResult.apps.length + flatpakResult.runtimes.length;
+            }
 
             if (checkCveEnabled && this._distroInfo) {
                 const ecosystem = getOsvEcosystem(this._distroInfo);

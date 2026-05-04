@@ -74,6 +74,14 @@ export default class PackageWatchdogPreferences extends ExtensionPreferences {
         settings.bind('check-flatpak', flatpakRow, 'active', Gio.SettingsBindFlags.DEFAULT);
         sourcesGroup.add(flatpakRow);
 
+        const ignoredPackagesRow = new Adw.EntryRow({
+            title: _('Ignored Packages'),
+        });
+        // @ts-ignore
+        ignoredPackagesRow.set_tooltip_text(_('Comma-separated list of packages or keywords to ignore (e.g. ibus, kernel)'));
+        settings.bind('ignored-packages', ignoredPackagesRow, 'text', Gio.SettingsBindFlags.DEFAULT);
+        sourcesGroup.add(ignoredPackagesRow);
+
         // ── Security Scanning ────────────────────────────────────────────────
         const securityGroup = new Adw.PreferencesGroup({
             title: _('Security Scanning'),
